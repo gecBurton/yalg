@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: llm-freeway-postgres
+    environment:
+      POSTGRES_USER: llm_freeway
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: llm_freeway
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_freeway -d llm_freeway"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - llm-freeway
+
+  llm-freeway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-freeway-app
+    environment:
+      # Database configuration
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=llm_freeway
+      - DB_PASSWORD=password
+      - DB_NAME=llm_freeway
+      - DB_SSLMODE=disable
+      - DB_ENABLED=true
+      
+      # Server configuration
+      - PORT=3000
+      - LOG_LEVEL=info
+      - LOG_FORMAT=text
+      
+      # Metrics and monitoring
+      - METRICS_ENABLED=true
+      - METRICS_RETENTION_DAYS=30
+      - METRICS_UPDATE_INTERVAL=1m
+      
+      # Authentication configuration (always required)
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-http://localhost:3000/callback/}
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
+      
+      # Provider configuration (set these in .env file)
+      - AZURE_OPENAI_ENABLED=${AZURE_OPENAI_ENABLED:-true}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      - AZURE_OPENAI_RATE_LIMIT=${AZURE_OPENAI_RATE_LIMIT:-60}
+      
+      - GEMINI_ENABLED=${GEMINI_ENABLED:-true}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_RATE_LIMIT=${GEMINI_RATE_LIMIT:-60}
+      
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_BEDROCK_RATE_LIMIT=${AWS_BEDROCK_RATE_LIMIT:-30}
+      
+      # Security settings
+      - LOG_REQUESTS=false
+      - LOG_RESPONSES=false
+      - LOG_TOKEN_USAGE=false
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - llm-freeway
+    volumes:
+      - ./ui.html:/app/ui.html:ro
+
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  llm-freeway:
+    driver: bridge

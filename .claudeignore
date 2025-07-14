@@ -1,0 +1,10 @@
+.env
+.env.local
+.env.production
+.env.development
+*.key
+*.pem
+*.p12
+*.crt
+secrets/
+credentials/
