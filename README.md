@@ -25,7 +25,6 @@ OpenAI-compatible API gateway that provides unified access to multiple AI provid
 ## 🎯 Supported Models
 
 ### Azure OpenAI Models
-- GPT-3.5 Turbo (`gpt-35-turbo`) - Fast, cost-effective
 - GPT-4 (`gpt-4`) - Most capable for complex tasks
 - GPT-4 Turbo (`gpt-4-turbo`) - Latest with improved speed
 - GPT-4o (`gpt-4o`) - Omni-modal capabilities
@@ -35,11 +34,8 @@ OpenAI-compatible API gateway that provides unified access to multiple AI provid
 - Claude 3 Haiku (`anthropic.claude-3-haiku-20240307-v1:0`) - Fast and efficient
 - Claude 3 Sonnet (`anthropic.claude-3-sonnet-20240229-v1:0`) - Balanced performance
 - Claude 3 Opus (`anthropic.claude-3-opus-20240229-v1:0`) - Most capable reasoning
-- Claude 3.5 Sonnet (`anthropic.claude-3-5-sonnet-20240620-v1:0`) - Enhanced capabilities
-- Claude 3.5 Sonnet v2 (`anthropic.claude-3-5-sonnet-20241022-v2:0`) - Latest improvements
 
 ### Google Gemini Models
-- Gemini 1.5 Pro (`gemini-1.5-pro`) - Most capable, 2M tokens
 - Gemini 1.5 Flash (`gemini-1.5-flash`) - Fast and efficient, 1M tokens
 - Gemini 2.0 Flash Experimental (`gemini-2.0-flash-exp`) - Next-generation model
 - Gemini 1.0 Pro (`gemini-1.0-pro`) - Original Gemini Pro
