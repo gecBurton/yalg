@@ -158,7 +158,7 @@ Returns OpenAI-compatible model list with provider information and capabilities.
 
 ## 📡 API Usage
 
-### Basic Request (Explicit Routing Required)
+### Basic Request
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -171,25 +171,6 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-### Required Explicit Routing
-All requests must use provider prefixes:
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "aws-bedrock/claude-3-5-sonnet-20240620-v1:0",
-    "messages": [
-      {"role": "user", "content": "Explain quantum computing"}
-    ]
-  }'
-```
-
-**Invalid** (will be rejected):
-```bash
-# This will fail - no automatic detection
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -d '{"model": "gpt-4", "messages": [...]}'
-```
 
 ### Using with OpenAI Libraries
 
@@ -204,7 +185,7 @@ client = OpenAI(
 
 # All models require explicit provider prefix
 response = client.chat.completions.create(
-    model="google/gemini-1.5-pro",  # Explicit routing required
+    model="google-ai/gemini-1.5-flash",  # Explicit routing required
     messages=[
         {"role": "user", "content": "Write a Python function to calculate factorial"}
     ]
@@ -233,7 +214,7 @@ for await (const chunk of response) {
 }
 ```
 
-## 🎯 Model Routing (Explicit Only)
+## 🎯 Model Routing 
 
 ### Required Provider Prefixes
 All model requests **must** include an explicit provider prefix. No automatic detection is performed to avoid routing errors.
