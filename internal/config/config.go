@@ -13,6 +13,7 @@ const (
 	ProviderAzureOpenAI ProviderType = "azure-openai"
 	ProviderAWSBedrock  ProviderType = "aws-bedrock"
 	ProviderGoogleAI    ProviderType = "google-ai"
+	ProviderAnthropic   ProviderType = "anthropic"
 )
 
 // ProviderConfig holds configuration for each provider
@@ -144,6 +145,15 @@ func LoadConfig() *Config {
 				MaxTokens:     getIntEnv("GEMINI_MAX_TOKENS", 8192),
 				RetryAttempts: getIntEnv("GEMINI_RETRY_ATTEMPTS", 3),
 				RetryDelay:    getDurationEnv("GEMINI_RETRY_DELAY", 1*time.Second),
+			},
+			ProviderAnthropic: {
+				Enabled:       getBoolEnv("ANTHROPIC_ENABLED", true), // Can be enabled even without API key
+				APIKey:        getEnv("ANTHROPIC_API_KEY", ""),
+				RateLimit:     getIntEnv("ANTHROPIC_RATE_LIMIT", 60),
+				Timeout:       getDurationEnv("ANTHROPIC_TIMEOUT", 30*time.Second),
+				MaxTokens:     getIntEnv("ANTHROPIC_MAX_TOKENS", 8192),
+				RetryAttempts: getIntEnv("ANTHROPIC_RETRY_ATTEMPTS", 3),
+				RetryDelay:    getDurationEnv("ANTHROPIC_RETRY_DELAY", 1*time.Second),
 			},
 		},
 		Metrics: MetricsConfig{

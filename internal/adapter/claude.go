@@ -3,12 +3,16 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/bedrock"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // Message represents an OpenAI chat message
@@ -24,76 +28,130 @@ type ChatRequest struct {
 	Stream   bool      `json:"stream"`
 }
 
-// AnthropicMessage represents a message in Anthropic format
-type AnthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// ClaudeAdapter handles conversion between OpenAI and Claude formats
+// ClaudeAdapter handles Claude models via both direct Anthropic API and AWS Bedrock
 type ClaudeAdapter struct {
-	bedrockClient *bedrockruntime.Client
+	directClient     anthropic.Client // For direct Anthropic API
+	bedrockClient    anthropic.Client // For AWS Bedrock
+	hasDirectClient  bool             // Track if direct client is initialized
+	hasBedrockClient bool             // Track if Bedrock client is initialized
 }
 
-// NewClaudeAdapter creates a new Claude adapter
-func NewClaudeAdapter(bedrockClient *bedrockruntime.Client) *ClaudeAdapter {
-	return &ClaudeAdapter{
-		bedrockClient: bedrockClient,
+// ClaudeAdapterConfig holds configuration for creating Claude adapters
+type ClaudeAdapterConfig struct {
+	AnthropicAPIKey string
+	AWSConfig       *aws.Config // For Bedrock authentication
+}
+
+// NewClaudeAdapter creates a new unified Claude adapter
+func NewClaudeAdapter(config ClaudeAdapterConfig) *ClaudeAdapter {
+	adapter := &ClaudeAdapter{}
+
+	// Initialize direct Anthropic client if API key is provided
+	if config.AnthropicAPIKey != "" {
+		adapter.directClient = anthropic.NewClient(
+			option.WithAPIKey(config.AnthropicAPIKey),
+		)
+		adapter.hasDirectClient = true
+		log.Printf("Direct Anthropic client initialized")
 	}
+
+	// Initialize Bedrock client if AWS config is provided
+	if config.AWSConfig != nil {
+		adapter.bedrockClient = anthropic.NewClient(
+			bedrock.WithConfig(*config.AWSConfig),
+		)
+		adapter.hasBedrockClient = true
+		log.Printf("Anthropic Bedrock client initialized")
+	}
+
+	return adapter
 }
 
-// IsAnthropicModel checks if a model name belongs to Anthropic
-func (a *ClaudeAdapter) IsAnthropicModel(model string) bool {
-	return strings.Contains(strings.ToLower(model), "claude") ||
+// IsClaudeModel checks if a model name belongs to Claude/Anthropic
+func (a *ClaudeAdapter) IsClaudeModel(model string) bool {
+	lowerModel := strings.ToLower(model)
+	return strings.Contains(lowerModel, "claude") ||
 		strings.HasPrefix(model, "anthropic.")
 }
 
+// getClientForModel returns the appropriate client based on model prefix
+func (a *ClaudeAdapter) getClientForModel(model string) (*anthropic.Client, error) {
+	if strings.HasPrefix(model, "anthropic/") {
+		if !a.hasDirectClient {
+			return nil, fmt.Errorf("direct Anthropic client not configured - missing API key")
+		}
+		return &a.directClient, nil
+	}
+	
+	if strings.HasPrefix(model, "aws-bedrock/") {
+		if !a.hasBedrockClient {
+			return nil, fmt.Errorf("Bedrock client not configured - missing AWS credentials")
+		}
+		return &a.bedrockClient, nil
+	}
+	
+	return nil, fmt.Errorf("unsupported model prefix: %s", model)
+}
+
+// normalizeModelName removes provider prefixes for API calls
+func (a *ClaudeAdapter) normalizeModelName(model string) string {
+	if strings.HasPrefix(model, "anthropic/") {
+		return strings.TrimPrefix(model, "anthropic/")
+	}
+	if strings.HasPrefix(model, "aws-bedrock/") {
+		return strings.TrimPrefix(model, "aws-bedrock/")
+	}
+	return model
+}
+
 // ConvertToAnthropicMessages converts OpenAI messages to Anthropic format
-func (a *ClaudeAdapter) ConvertToAnthropicMessages(messages []Message) ([]AnthropicMessage, string) {
-	var anthropicMessages []AnthropicMessage
+func (a *ClaudeAdapter) ConvertToAnthropicMessages(messages []Message) ([]anthropic.MessageParam, string) {
+	var anthropicMessages []anthropic.MessageParam
 	var systemMessage string
 
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
 			systemMessage = msg.Content
-		case "user", "assistant":
-			anthropicMessages = append(anthropicMessages, AnthropicMessage{
-				Role:    msg.Role,
-				Content: msg.Content,
-			})
+		case "user":
+			anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock(msg.Content),
+			))
+		case "assistant":
+			anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(
+				anthropic.NewTextBlock(msg.Content),
+			))
 		}
 	}
+
 	return anthropicMessages, systemMessage
 }
 
 // ConvertAnthropicToOpenAI converts Anthropic response to OpenAI format
-func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp map[string]interface{}, model string) map[string]interface{} {
-	content := ""
-	if contentArray, ok := anthropicResp["content"].([]interface{}); ok && len(contentArray) > 0 {
-		if contentItem, ok := contentArray[0].(map[string]interface{}); ok {
-			if text, ok := contentItem["text"].(string); ok {
-				content = text
-			}
+func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp *anthropic.Message, model string) map[string]interface{} {
+	// Extract content
+	var content string
+	for _, block := range anthropicResp.Content {
+		if block.Type == "text" {
+			content += block.Text
 		}
 	}
 
-	// Extract token usage from Anthropic response
-	var promptTokens, completionTokens, totalTokens int
-	if usage, ok := anthropicResp["usage"].(map[string]interface{}); ok {
-		if inputTokens, ok := usage["input_tokens"].(float64); ok {
-			promptTokens = int(inputTokens)
-		}
-		if outputTokens, ok := usage["output_tokens"].(float64); ok {
-			completionTokens = int(outputTokens)
-		}
-		totalTokens = promptTokens + completionTokens
+	// Extract token usage
+	promptTokens := int(anthropicResp.Usage.InputTokens)
+	completionTokens := int(anthropicResp.Usage.OutputTokens)
+	totalTokens := promptTokens + completionTokens
+
+	// Convert stop reason
+	finishReason := "stop"
+	if anthropicResp.StopReason != "" {
+		finishReason = string(anthropicResp.StopReason)
 	}
 
 	return map[string]interface{}{
-		"id":      "chatcmpl-" + strings.ReplaceAll(strings.ToLower(model), ".", "-"),
+		"id":      "chatcmpl-" + anthropicResp.ID,
 		"object":  "chat.completion",
-		"created": 1699999999,
+		"created": time.Now().Unix(),
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
@@ -102,7 +160,7 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp map[string]interf
 					"role":    "assistant",
 					"content": content,
 				},
-				"finish_reason": "stop",
+				"finish_reason": finishReason,
 			},
 		},
 		"usage": map[string]interface{}{
@@ -113,60 +171,12 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp map[string]interf
 	}
 }
 
-// BuildAnthropicPayload creates the request payload for Anthropic models
-func (a *ClaudeAdapter) BuildAnthropicPayload(messages []AnthropicMessage, systemMessage string) map[string]interface{} {
-	payload := map[string]interface{}{
-		"anthropic_version": "bedrock-2023-05-31",
-		"max_tokens":        1000,
-		"messages":          messages,
-	}
-
-	if systemMessage != "" {
-		payload["system"] = systemMessage
-	}
-
-	return payload
-}
-
-// BuildAnthropicStreamingPayload creates the request payload for streaming Anthropic models
-func (a *ClaudeAdapter) BuildAnthropicStreamingPayload(messages []AnthropicMessage, systemMessage string) map[string]interface{} {
-	// For Bedrock streaming, we use the same payload as non-streaming
-	// The streaming behavior is controlled by the API call type (InvokeModelWithResponseStream vs InvokeModel)
-	return a.BuildAnthropicPayload(messages, systemMessage)
-}
-
-// ConvertErrorToOpenAIStream converts an error to OpenAI streaming format  
-func (a *ClaudeAdapter) ConvertErrorToOpenAIStream(err error, model string) map[string]interface{} {
-	return map[string]interface{}{
-		"id":      "chatcmpl-error-" + strings.ReplaceAll(strings.ToLower(model), ".", "-"),
-		"object":  "chat.completion.chunk",
-		"created": 1699999999,
-		"model":   model,
-		"error": map[string]interface{}{
-			"message": err.Error(),
-			"type":    "invalid_request_error",
-			"code":    "model_error",
-		},
-	}
-}
-
-// ConvertErrorToOpenAI converts an error to OpenAI non-streaming format
-func (a *ClaudeAdapter) ConvertErrorToOpenAI(err error, model string) map[string]interface{} {
-	return map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": err.Error(),
-			"type":    "invalid_request_error",
-			"code":    "model_error",
-		},
-	}
-}
-
-// ConvertAnthropicStreamToOpenAI converts Anthropic stream chunks to OpenAI format
-func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(chunk map[string]interface{}, model string) map[string]interface{} {
+// ConvertAnthropicStreamToOpenAI converts Anthropic stream events to OpenAI format
+func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageStreamEventUnion, model string) map[string]interface{} {
 	openaiChunk := map[string]interface{}{
-		"id":      "chatcmpl-" + strings.ReplaceAll(strings.ToLower(model), ".", "-"),
+		"id":      "chatcmpl-" + fmt.Sprintf("%d", time.Now().UnixNano()),
 		"object":  "chat.completion.chunk",
-		"created": 1699999999,
+		"created": time.Now().Unix(),
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
@@ -177,134 +187,170 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(chunk map[string]interfac
 		},
 	}
 
-	// Handle different types of Anthropic streaming events
-	if eventType, ok := chunk["type"].(string); ok {
-		choice := openaiChunk["choices"].([]map[string]interface{})[0]
-		delta := choice["delta"].(map[string]interface{})
+	choice := openaiChunk["choices"].([]map[string]interface{})[0]
+	delta := choice["delta"].(map[string]interface{})
 
-		switch eventType {
-		case "message_start":
-			// Start of message - add role
-			delta["role"] = "assistant"
-			
-		case "content_block_delta":
-			// Content chunk - extract text
-			if deltaData, ok := chunk["delta"].(map[string]interface{}); ok {
-				if text, ok := deltaData["text"].(string); ok {
-					delta["content"] = text
-				}
-			}
-			
-		case "message_delta":
-			// Message completion info
-			if deltaData, ok := chunk["delta"].(map[string]interface{}); ok {
-				if stopReason, ok := deltaData["stop_reason"].(string); ok && stopReason != "" {
-					choice["finish_reason"] = "stop"
-				}
-			}
-			
-		case "message_stop":
-			// End of message
-			choice["finish_reason"] = "stop"
+	// Handle different types of Anthropic streaming events
+	switch event.Type {
+	case "message_start":
+		// Start of message - add role
+		delta["role"] = "assistant"
+		
+	case "content_block_start":
+		// Skip content block start events
+		
+	case "content_block_delta":
+		// Content chunk - extract text from delta
+		if event.Delta.Text != "" {
+			delta["content"] = event.Delta.Text
 		}
+		
+	case "content_block_stop":
+		// Skip content block stop events
+		
+	case "message_delta":
+		// Message completion info
+		if event.Delta.StopReason != "" {
+			choice["finish_reason"] = string(event.Delta.StopReason)
+		}
+		
+	case "message_stop":
+		// End of message
+		choice["finish_reason"] = "stop"
+		
+	default:
+		// Log unknown event types
+		log.Printf("Unknown stream event type: %s", event.Type)
 	}
 
 	return openaiChunk
 }
 
-// HandleRequest processes requests for Anthropic models via Bedrock
+// HandleRequest processes non-streaming requests for Claude models
 func (a *ClaudeAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, error) {
-	log.Printf("Processing non-streaming request for model: %s", req.Model)
+	log.Printf("Processing non-streaming request for Claude model: %s", req.Model)
 	
-	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
-	anthropicPayload := a.BuildAnthropicPayload(anthropicMessages, systemMessage)
-
-	// Call Bedrock
-	payloadBytes, _ := json.Marshal(anthropicPayload)
-	
-	log.Printf("Calling Bedrock with model ID: %s", req.Model)
-	
-	result, err := a.bedrockClient.InvokeModel(context.Background(), &bedrockruntime.InvokeModelInput{
-		ModelId:     &req.Model,
-		ContentType: &[]string{"application/json"}[0],
-		Body:        payloadBytes,
-	})
-
+	client, err := a.getClientForModel(req.Model)
 	if err != nil {
-		log.Printf("Bedrock error for model %s: %v", req.Model, err)
 		return nil, err
 	}
 
-	// Parse Anthropic response
-	var anthropicResp map[string]interface{}
-	if err := json.Unmarshal(result.Body, &anthropicResp); err != nil {
+	normalizedModel := a.normalizeModelName(req.Model)
+	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
+	
+	// Build the message params
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(normalizedModel),
+		MaxTokens: 1000,
+		Messages:  anthropicMessages,
+	}
+	
+	if systemMessage != "" {
+		params.System = []anthropic.TextBlockParam{
+			{
+				Text: systemMessage,
+			},
+		}
+	}
+	
+	log.Printf("Calling Anthropic API (%s) with %d messages", req.Model, len(anthropicMessages))
+	
+	// Call Anthropic API (works for both direct and Bedrock)
+	result, err := client.Messages.New(context.Background(), params)
+	if err != nil {
+		log.Printf("Anthropic API error for model %s: %v", req.Model, err)
 		return nil, err
 	}
+
+	log.Printf("Anthropic API response received, content blocks: %d", len(result.Content))
 
 	// Convert to OpenAI format
-	return a.ConvertAnthropicToOpenAI(anthropicResp, req.Model), nil
+	response := a.ConvertAnthropicToOpenAI(result, req.Model)
+	
+	// Log the response structure for debugging
+	if data, err := json.Marshal(response); err == nil {
+		log.Printf("Converted response: %s", string(data))
+	} else {
+		log.Printf("Error marshaling response: %v", err)
+	}
+	
+	return response, nil
 }
 
-// HandleStreamingRequest processes streaming requests for Anthropic models via Bedrock
+// HandleStreamingRequest processes streaming requests for Claude models
 func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseWriter) error {
-	log.Printf("Processing streaming request for model: %s", req.Model)
+	log.Printf("Processing streaming request for Claude model: %s", req.Model)
 	
-	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
-	anthropicPayload := a.BuildAnthropicStreamingPayload(anthropicMessages, systemMessage)
-
-	// Call Bedrock with streaming
-	payloadBytes, _ := json.Marshal(anthropicPayload)
-	
-	log.Printf("Calling Bedrock streaming with model ID: %s", req.Model)
-	log.Printf("Payload: %s", string(payloadBytes))
-	
-	result, err := a.bedrockClient.InvokeModelWithResponseStream(context.Background(), &bedrockruntime.InvokeModelWithResponseStreamInput{
-		ModelId:     &req.Model,
-		ContentType: &[]string{"application/json"}[0],
-		Body:        payloadBytes,
-	})
-
+	client, err := a.getClientForModel(req.Model)
 	if err != nil {
-		log.Printf("Bedrock streaming error for model %s: %v", req.Model, err)
 		return err
 	}
 
-	// Headers are set by the server, not here
-
+	normalizedModel := a.normalizeModelName(req.Model)
+	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
+	
+	// Build the message params
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(normalizedModel),
+		MaxTokens: 1000,
+		Messages:  anthropicMessages,
+	}
+	
+	if systemMessage != "" {
+		params.System = []anthropic.TextBlockParam{
+			{
+				Text: systemMessage,
+			},
+		}
+	}
+	
+	log.Printf("Calling Anthropic streaming API (%s) with %d messages", req.Model, len(anthropicMessages))
+	
+	// Call Anthropic streaming API (works for both direct and Bedrock)
+	stream := client.Messages.NewStreaming(context.Background(), params)
+	
 	// Process the stream
-	stream := result.GetStream()
-
-	for event := range stream.Events() {
-		switch v := event.(type) {
-		case *types.ResponseStreamMemberChunk:
-			// Parse the chunk
-			var chunk map[string]interface{}
-			if err := json.Unmarshal(v.Value.Bytes, &chunk); err != nil {
-				log.Printf("Failed to parse stream chunk: %v", err)
-				continue
-			}
-
-			// Convert to OpenAI format
-			openaiChunk := a.ConvertAnthropicStreamToOpenAI(chunk, req.Model)
+	eventCount := 0
+	for stream.Next() {
+		event := stream.Current()
+		eventCount++
+		
+		log.Printf("Received stream event %d: type=%s", eventCount, event.Type)
+		
+		// Convert to OpenAI format
+		openaiChunk := a.ConvertAnthropicStreamToOpenAI(event, req.Model)
+		
+		// Skip empty chunks that don't add value
+		choices := openaiChunk["choices"].([]map[string]interface{})
+		if len(choices) > 0 {
+			delta := choices[0]["delta"].(map[string]interface{})
+			finishReason := choices[0]["finish_reason"]
 			
-			// Send as SSE
-			data, _ := json.Marshal(openaiChunk)
-			w.Write([]byte("data: " + string(data) + "\n\n"))
-			
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
+			// Only send chunk if it has content, role, or finish_reason
+			if len(delta) > 0 || finishReason != nil {
+				// Send as SSE
+				data, err := json.Marshal(openaiChunk)
+				if err != nil {
+					log.Printf("Error marshaling chunk: %v", err)
+					continue
+				}
+				
+				w.Write([]byte("data: " + string(data) + "\n\n"))
 			}
-
-		default:
-			// Handle other event types if needed
-			log.Printf("Unknown stream event type: %T", v)
+		}
+		
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
 		}
 	}
 
 	if err := stream.Err(); err != nil {
+		log.Printf("Anthropic streaming error for model %s: %v", req.Model, err)
 		return err
 	}
 
+	log.Printf("Stream completed after %d events", eventCount)
+	
 	// Send completion marker
 	w.Write([]byte("data: [DONE]\n\n"))
 	

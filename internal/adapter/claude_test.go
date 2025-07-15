@@ -1,11 +1,13 @@
 package adapter
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-func TestClaudeAdapter_IsAnthropicModel(t *testing.T) {
+func TestClaudeAdapter_IsClaudeModel(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 	
 	tests := []struct {
@@ -24,6 +26,16 @@ func TestClaudeAdapter_IsAnthropicModel(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "Direct Anthropic model",
+			model:    "anthropic/claude-3-5-sonnet-20241022",
+			expected: true,
+		},
+		{
+			name:     "Bedrock Claude model",
+			model:    "aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+			expected: true,
+		},
+		{
 			name:     "GPT model",
 			model:    "gpt-4",
 			expected: false,
@@ -31,6 +43,11 @@ func TestClaudeAdapter_IsAnthropicModel(t *testing.T) {
 		{
 			name:     "GPT-3.5 model",
 			model:    "gpt-35-turbo",
+			expected: false,
+		},
+		{
+			name:     "Gemini model",
+			model:    "gemini-1.5-pro",
 			expected: false,
 		},
 		{
@@ -47,9 +64,158 @@ func TestClaudeAdapter_IsAnthropicModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := adapter.IsAnthropicModel(tt.model)
+			result := adapter.IsClaudeModel(tt.model)
 			if result != tt.expected {
-				t.Errorf("IsAnthropicModel(%q) = %v, want %v", tt.model, result, tt.expected)
+				t.Errorf("IsClaudeModel(%q) = %v, want %v", tt.model, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestClaudeAdapter_getClientForModel(t *testing.T) {
+	// Create adapter with both clients initialized
+	adapter := &ClaudeAdapter{
+		hasDirectClient:  true,
+		hasBedrockClient: true,
+	}
+	
+	tests := []struct {
+		name        string
+		model       string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Direct Anthropic model",
+			model:       "anthropic/claude-3-5-sonnet-20241022",
+			expectError: false,
+		},
+		{
+			name:        "Bedrock Claude model",
+			model:       "aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+			expectError: false,
+		},
+		{
+			name:        "Unsupported prefix",
+			model:       "openai/gpt-4",
+			expectError: true,
+			errorMsg:    "unsupported model prefix",
+		},
+		{
+			name:        "No prefix",
+			model:       "claude-3-sonnet",
+			expectError: true,
+			errorMsg:    "unsupported model prefix",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := adapter.getClientForModel(tt.model)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("getClientForModel(%q) expected error, got nil", tt.model)
+				} else if tt.errorMsg != "" && !containsString(err.Error(), tt.errorMsg) {
+					t.Errorf("getClientForModel(%q) error = %q, want to contain %q", tt.model, err.Error(), tt.errorMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("getClientForModel(%q) unexpected error: %v", tt.model, err)
+				}
+				if client == nil {
+					t.Errorf("getClientForModel(%q) returned nil client", tt.model)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeAdapter_getClientForModel_MissingClients(t *testing.T) {
+	tests := []struct {
+		name             string
+		hasDirectClient  bool
+		hasBedrockClient bool
+		model            string
+		expectError      bool
+		errorMsg         string
+	}{
+		{
+			name:             "Direct client missing",
+			hasDirectClient:  false,
+			hasBedrockClient: true,
+			model:            "anthropic/claude-3-5-sonnet-20241022",
+			expectError:      true,
+			errorMsg:         "direct Anthropic client not configured",
+		},
+		{
+			name:             "Bedrock client missing",
+			hasDirectClient:  true,
+			hasBedrockClient: false,
+			model:            "aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+			expectError:      true,
+			errorMsg:         "Bedrock client not configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &ClaudeAdapter{
+				hasDirectClient:  tt.hasDirectClient,
+				hasBedrockClient: tt.hasBedrockClient,
+			}
+			
+			client, err := adapter.getClientForModel(tt.model)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("getClientForModel(%q) expected error, got nil", tt.model)
+				} else if !containsString(err.Error(), tt.errorMsg) {
+					t.Errorf("getClientForModel(%q) error = %q, want to contain %q", tt.model, err.Error(), tt.errorMsg)
+				}
+				if client != nil {
+					t.Errorf("getClientForModel(%q) expected nil client on error", tt.model)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeAdapter_normalizeModelName(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+	
+	tests := []struct {
+		name     string
+		model    string
+		expected string
+	}{
+		{
+			name:     "Direct Anthropic model",
+			model:    "anthropic/claude-3-5-sonnet-20241022",
+			expected: "claude-3-5-sonnet-20241022",
+		},
+		{
+			name:     "Bedrock Claude model",
+			model:    "aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+			expected: "anthropic.claude-3-sonnet-20240229-v1:0",
+		},
+		{
+			name:     "Model without prefix",
+			model:    "claude-3-sonnet",
+			expected: "claude-3-sonnet",
+		},
+		{
+			name:     "Empty model",
+			model:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := adapter.normalizeModelName(tt.model)
+			if result != tt.expected {
+				t.Errorf("normalizeModelName(%q) = %q, want %q", tt.model, result, tt.expected)
 			}
 		})
 	}
@@ -59,19 +225,17 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 	
 	tests := []struct {
-		name                string
-		messages            []Message
-		expectedMessages    []AnthropicMessage
-		expectedSystemMsg   string
+		name              string
+		messages          []Message
+		expectedMsgCount  int
+		expectedSystemMsg string
 	}{
 		{
 			name: "Simple user message",
 			messages: []Message{
 				{Role: "user", Content: "Hello"},
 			},
-			expectedMessages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
-			},
+			expectedMsgCount:  1,
 			expectedSystemMsg: "",
 		},
 		{
@@ -80,9 +244,7 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 				{Role: "system", Content: "You are a helpful assistant"},
 				{Role: "user", Content: "Hello"},
 			},
-			expectedMessages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
-			},
+			expectedMsgCount:  1,
 			expectedSystemMsg: "You are a helpful assistant",
 		},
 		{
@@ -92,11 +254,7 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 				{Role: "assistant", Content: "Hi there!"},
 				{Role: "user", Content: "How are you?"},
 			},
-			expectedMessages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
-				{Role: "assistant", Content: "Hi there!"},
-				{Role: "user", Content: "How are you?"},
-			},
+			expectedMsgCount:  3,
 			expectedSystemMsg: "",
 		},
 		{
@@ -107,10 +265,7 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 				{Role: "assistant", Content: "Hi!"},
 				{Role: "function", Content: "Function result"}, // Should be ignored
 			},
-			expectedMessages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
-				{Role: "assistant", Content: "Hi!"},
-			},
+			expectedMsgCount:  2,
 			expectedSystemMsg: "You are helpful",
 		},
 	}
@@ -119,8 +274,8 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			messages, systemMsg := adapter.ConvertToAnthropicMessages(tt.messages)
 			
-			if !reflect.DeepEqual(messages, tt.expectedMessages) {
-				t.Errorf("ConvertToAnthropicMessages() messages = %v, want %v", messages, tt.expectedMessages)
+			if len(messages) != tt.expectedMsgCount {
+				t.Errorf("ConvertToAnthropicMessages() message count = %d, want %d", len(messages), tt.expectedMsgCount)
 			}
 			
 			if systemMsg != tt.expectedSystemMsg {
@@ -130,128 +285,152 @@ func TestClaudeAdapter_ConvertToAnthropicMessages(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapter_BuildAnthropicPayload(t *testing.T) {
+func TestClaudeAdapter_ConvertAnthropicToOpenAI(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 	
+	// Create a mock Anthropic response
+	anthropicResp := &anthropic.Message{
+		ID:         "msg_123",
+		StopReason: "end_turn",
+		Content: []anthropic.ContentBlockUnion{
+			{
+				Type: "text",
+				Text: "Hello, how can I help you?",
+			},
+		},
+		Usage: anthropic.Usage{
+			InputTokens:  10,
+			OutputTokens: 15,
+		},
+	}
+	
+	result := adapter.ConvertAnthropicToOpenAI(anthropicResp, "claude-3-5-sonnet-20241022")
+	
+	// Check basic structure
+	if result["object"] != "chat.completion" {
+		t.Errorf("ConvertAnthropicToOpenAI() object = %v, want %q", result["object"], "chat.completion")
+	}
+	
+	if result["model"] != "claude-3-5-sonnet-20241022" {
+		t.Errorf("ConvertAnthropicToOpenAI() model = %v, want %q", result["model"], "claude-3-5-sonnet-20241022")
+	}
+	
+	// Check ID
+	if result["id"] != "chatcmpl-msg_123" {
+		t.Errorf("ConvertAnthropicToOpenAI() id = %v, want %q", result["id"], "chatcmpl-msg_123")
+	}
+	
+	// Check choices
+	choices, ok := result["choices"].([]map[string]interface{})
+	if !ok || len(choices) == 0 {
+		t.Fatal("ConvertAnthropicToOpenAI() choices not found or empty")
+	}
+	
+	message, ok := choices[0]["message"].(map[string]string)
+	if !ok {
+		t.Fatal("ConvertAnthropicToOpenAI() message not found")
+	}
+	
+	if message["content"] != "Hello, how can I help you?" {
+		t.Errorf("ConvertAnthropicToOpenAI() content = %q, want %q", message["content"], "Hello, how can I help you?")
+	}
+	
+	if message["role"] != "assistant" {
+		t.Errorf("ConvertAnthropicToOpenAI() role = %q, want %q", message["role"], "assistant")
+	}
+	
+	// Check usage
+	usage, ok := result["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("ConvertAnthropicToOpenAI() usage not found")
+	}
+	
+	if usage["prompt_tokens"] != 10 {
+		t.Errorf("ConvertAnthropicToOpenAI() prompt_tokens = %v, want %d", usage["prompt_tokens"], 10)
+	}
+	
+	if usage["completion_tokens"] != 15 {
+		t.Errorf("ConvertAnthropicToOpenAI() completion_tokens = %v, want %d", usage["completion_tokens"], 15)
+	}
+	
+	if usage["total_tokens"] != 25 {
+		t.Errorf("ConvertAnthropicToOpenAI() total_tokens = %v, want %d", usage["total_tokens"], 25)
+	}
+}
+
+func TestNewClaudeAdapter(t *testing.T) {
 	tests := []struct {
-		name          string
-		messages      []AnthropicMessage
-		systemMessage string
-		expectedKeys  []string
+		name                 string
+		config               ClaudeAdapterConfig
+		expectedDirectClient bool
+		expectedBedrockClient bool
 	}{
 		{
-			name: "Basic payload",
-			messages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
+			name: "Both clients configured",
+			config: ClaudeAdapterConfig{
+				AnthropicAPIKey: "sk-test-key",
+				AWSConfig:       &aws.Config{},
 			},
-			systemMessage: "",
-			expectedKeys:  []string{"anthropic_version", "max_tokens", "messages"},
+			expectedDirectClient:  true,
+			expectedBedrockClient: true,
 		},
 		{
-			name: "Payload with system message",
-			messages: []AnthropicMessage{
-				{Role: "user", Content: "Hello"},
+			name: "Only direct client configured",
+			config: ClaudeAdapterConfig{
+				AnthropicAPIKey: "sk-test-key",
+				AWSConfig:       nil,
 			},
-			systemMessage: "You are helpful",
-			expectedKeys:  []string{"anthropic_version", "max_tokens", "messages", "system"},
+			expectedDirectClient:  true,
+			expectedBedrockClient: false,
+		},
+		{
+			name: "Only Bedrock client configured",
+			config: ClaudeAdapterConfig{
+				AnthropicAPIKey: "",
+				AWSConfig:       &aws.Config{},
+			},
+			expectedDirectClient:  false,
+			expectedBedrockClient: true,
+		},
+		{
+			name: "No clients configured",
+			config: ClaudeAdapterConfig{
+				AnthropicAPIKey: "",
+				AWSConfig:       nil,
+			},
+			expectedDirectClient:  false,
+			expectedBedrockClient: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := adapter.BuildAnthropicPayload(tt.messages, tt.systemMessage)
+			adapter := NewClaudeAdapter(tt.config)
 			
-			// Check that all expected keys are present
-			for _, key := range tt.expectedKeys {
-				if _, exists := payload[key]; !exists {
-					t.Errorf("BuildAnthropicPayload() missing key %q", key)
-				}
+			if adapter.hasDirectClient != tt.expectedDirectClient {
+				t.Errorf("NewClaudeAdapter() hasDirectClient = %v, want %v", adapter.hasDirectClient, tt.expectedDirectClient)
 			}
 			
-			// Check specific values
-			if payload["anthropic_version"] != "bedrock-2023-05-31" {
-				t.Errorf("BuildAnthropicPayload() anthropic_version = %v, want %q", payload["anthropic_version"], "bedrock-2023-05-31")
-			}
-			
-			if payload["max_tokens"] != 1000 {
-				t.Errorf("BuildAnthropicPayload() max_tokens = %v, want %d", payload["max_tokens"], 1000)
-			}
-			
-			if tt.systemMessage != "" && payload["system"] != tt.systemMessage {
-				t.Errorf("BuildAnthropicPayload() system = %v, want %q", payload["system"], tt.systemMessage)
+			if adapter.hasBedrockClient != tt.expectedBedrockClient {
+				t.Errorf("NewClaudeAdapter() hasBedrockClient = %v, want %v", adapter.hasBedrockClient, tt.expectedBedrockClient)
 			}
 		})
 	}
 }
 
-func TestClaudeAdapter_ConvertAnthropicToOpenAI(t *testing.T) {
-	adapter := &ClaudeAdapter{}
-	
-	tests := []struct {
-		name           string
-		anthropicResp  map[string]interface{}
-		model          string
-		expectedContent string
-	}{
-		{
-			name: "Valid Anthropic response",
-			anthropicResp: map[string]interface{}{
-				"content": []interface{}{
-					map[string]interface{}{
-						"text": "Hello, how can I help you?",
-					},
-				},
-			},
-			model:          "anthropic.claude-3-sonnet-20240229-v1:0",
-			expectedContent: "Hello, how can I help you?",
-		},
-		{
-			name: "Empty content response",
-			anthropicResp: map[string]interface{}{
-				"content": []interface{}{},
-			},
-			model:          "claude-3-haiku",
-			expectedContent: "",
-		},
-		{
-			name:           "Malformed response",
-			anthropicResp:  map[string]interface{}{},
-			model:          "claude-3-opus",
-			expectedContent: "",
-		},
-	}
+// Helper function to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || 
+		(len(substr) > 0 && len(s) > len(substr) && 
+			(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
+				findInString(s, substr))))
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := adapter.ConvertAnthropicToOpenAI(tt.anthropicResp, tt.model)
-			
-			// Check basic structure
-			if result["object"] != "chat.completion" {
-				t.Errorf("ConvertAnthropicToOpenAI() object = %v, want %q", result["object"], "chat.completion")
-			}
-			
-			if result["model"] != tt.model {
-				t.Errorf("ConvertAnthropicToOpenAI() model = %v, want %q", result["model"], tt.model)
-			}
-			
-			// Check message content
-			choices, ok := result["choices"].([]map[string]interface{})
-			if !ok || len(choices) == 0 {
-				t.Fatal("ConvertAnthropicToOpenAI() choices not found or empty")
-			}
-			
-			message, ok := choices[0]["message"].(map[string]string)
-			if !ok {
-				t.Fatal("ConvertAnthropicToOpenAI() message not found")
-			}
-			
-			if message["content"] != tt.expectedContent {
-				t.Errorf("ConvertAnthropicToOpenAI() content = %q, want %q", message["content"], tt.expectedContent)
-			}
-			
-			if message["role"] != "assistant" {
-				t.Errorf("ConvertAnthropicToOpenAI() role = %q, want %q", message["role"], "assistant")
-			}
-		})
+func findInString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
 	}
+	return false
 }

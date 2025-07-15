@@ -18,6 +18,7 @@ import (
 	"llm-freeway/internal/errors"
 	"llm-freeway/internal/router"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/openai/openai-go"
@@ -59,13 +60,15 @@ type ErrorResponse struct {
 
 // ServerConfig holds configuration for the server
 type ServerConfig struct {
-	Config        *config.Config
-	BedrockClient *bedrockruntime.Client
-	GeminiClient  *genai.Client
-	OpenAIClient  *openai.Client
-	Database      *database.DB
-	ErrorHandler  *errors.ErrorHandler
-	Router        *router.Router
+	Config          *config.Config
+	BedrockClient   *bedrockruntime.Client
+	GeminiClient    *genai.Client
+	OpenAIClient    *openai.Client
+	AnthropicAPIKey string
+	AWSConfig       *aws.Config
+	Database        *database.DB
+	ErrorHandler    *errors.ErrorHandler
+	Router          *router.Router
 }
 
 // Server provides LLM gateway functionality with metrics, rate limiting, etc.
@@ -86,8 +89,14 @@ func NewServer(cfg ServerConfig) *Server {
 		geminiAdapter = adapter.NewGeminiAdapter(cfg.GeminiClient)
 	}
 
+	// Create unified Claude adapter for both direct Anthropic and Bedrock
+	claudeAdapter := adapter.NewClaudeAdapter(adapter.ClaudeAdapterConfig{
+		AnthropicAPIKey: cfg.AnthropicAPIKey,
+		AWSConfig:       cfg.AWSConfig,
+	})
+
 	return &Server{
-		claudeAdapter: adapter.NewClaudeAdapter(cfg.BedrockClient),
+		claudeAdapter: claudeAdapter,
 		geminiAdapter: geminiAdapter,
 		openaiClient:  cfg.OpenAIClient,
 		config:        cfg.Config,
@@ -124,6 +133,7 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 			"azure_openai": s.config.IsProviderEnabled(config.ProviderAzureOpenAI),
 			"aws_bedrock":  s.config.IsProviderEnabled(config.ProviderAWSBedrock),
 			"google_ai":    s.config.IsProviderEnabled(config.ProviderGoogleAI),
+			"anthropic":    s.config.IsProviderEnabled(config.ProviderAnthropic),
 		},
 		"metrics_enabled": s.config.Metrics.Enabled,
 	}
@@ -243,7 +253,11 @@ func (s *Server) ChatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 	var responseErr error
 	switch provider {
 	case config.ProviderAWSBedrock:
-		responseErr = s.handleProviderRequest(normalizedReq, w, &metric, s.handleClaude)
+		// Claude adapter needs original model name with prefix for routing
+		responseErr = s.handleProviderRequest(req, w, &metric, s.handleClaude)
+	case config.ProviderAnthropic:
+		// Claude adapter needs original model name with prefix for routing  
+		responseErr = s.handleProviderRequest(req, w, &metric, s.handleClaude)
 	case config.ProviderGoogleAI:
 		responseErr = s.handleProviderRequest(normalizedReq, w, &metric, s.handleGemini)
 	case config.ProviderAzureOpenAI:
@@ -322,9 +336,19 @@ func (s *Server) sendErrorResponse(w http.ResponseWriter, err *errors.ProviderEr
 	})
 }
 
-// handleClaude processes requests for Anthropic models
+// handleClaude processes requests for Anthropic models (both Bedrock and direct)
 func (s *Server) handleClaude(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics) error {
-	log.Printf("Routing to Anthropic model: %s", req.Model)
+	log.Printf("Routing to Claude model: %s", req.Model)
+
+	// Detect the actual provider from the model name for proper error handling
+	var provider config.ProviderType
+	if strings.HasPrefix(req.Model, "anthropic/") {
+		provider = config.ProviderAnthropic
+	} else if strings.HasPrefix(req.Model, "aws-bedrock/") {
+		provider = config.ProviderAWSBedrock
+	} else {
+		provider = config.ProviderAWSBedrock // Default fallback
+	}
 
 	if req.Stream {
 		return s.handleStreamingRequest(req, w, metric, func() error {
@@ -335,7 +359,7 @@ func (s *Server) handleClaude(req adapter.ChatRequest, w http.ResponseWriter, me
 	// Handle non-streaming
 	openaiResp, err := s.claudeAdapter.HandleRequest(req)
 	if err != nil {
-		return s.handleNonStreamingError(err, w, metric, req.Model, config.ProviderAWSBedrock)
+		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
 	}
 
 	s.extractTokenUsage(openaiResp, metric)

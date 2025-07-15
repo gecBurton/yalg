@@ -48,14 +48,16 @@ func (r *Router) DetectProvider(model string) (config.ProviderType, error) {
 			return config.ProviderAWSBedrock, nil
 		case "google-ai":
 			return config.ProviderGoogleAI, nil
+		case "anthropic":
+			return config.ProviderAnthropic, nil
 		default:
-			return "", fmt.Errorf("unsupported provider prefix '%s' in model '%s' - supported prefixes: azure-openai, aws-bedrock, google-ai", prefix, model)
+			return "", fmt.Errorf("unsupported provider prefix '%s' in model '%s' - supported prefixes: azure-openai, aws-bedrock, google-ai, anthropic", prefix, model)
 		}
 	}
 	
 	// No provider prefix found
-	return "", fmt.Errorf("model '%s' requires explicit provider prefix (e.g., 'azure-openai/%s', 'aws-bedrock/%s', 'google-ai/%s')", 
-		model, model, model, model)
+	return "", fmt.Errorf("model '%s' requires explicit provider prefix (e.g., 'azure-openai/%s', 'aws-bedrock/%s', 'google-ai/%s', 'anthropic/%s')", 
+		model, model, model, model, model)
 }
 
 
@@ -224,6 +226,48 @@ func (r *Router) initializeRoutes() {
 		DisplayName:       "Gemini 1.0 Pro",
 		Description:       "Original Gemini Pro model",
 		MaxTokens:         32768,
+		SupportsStreaming: true,
+	}
+	
+	// Direct Anthropic models
+	r.routes["claude-3-5-sonnet-20241022"] = ModelRoute{
+		Provider:          config.ProviderAnthropic,
+		OriginalName:      "claude-3-5-sonnet-20241022",
+		DisplayName:       "Claude 3.5 Sonnet",
+		Description:       "Latest Claude 3.5 model via direct Anthropic API",
+		MaxTokens:         200000,
+		SupportsStreaming: true,
+	}
+	r.routes["claude-3-5-haiku-20241022"] = ModelRoute{
+		Provider:          config.ProviderAnthropic,
+		OriginalName:      "claude-3-5-haiku-20241022",
+		DisplayName:       "Claude 3.5 Haiku",
+		Description:       "Fast and efficient Claude 3.5 model via direct Anthropic API",
+		MaxTokens:         200000,
+		SupportsStreaming: true,
+	}
+	r.routes["claude-3-opus-20240229"] = ModelRoute{
+		Provider:          config.ProviderAnthropic,
+		OriginalName:      "claude-3-opus-20240229",
+		DisplayName:       "Claude 3 Opus",
+		Description:       "Most capable Claude model via direct Anthropic API",
+		MaxTokens:         200000,
+		SupportsStreaming: true,
+	}
+	r.routes["claude-3-sonnet-20240229"] = ModelRoute{
+		Provider:          config.ProviderAnthropic,
+		OriginalName:      "claude-3-sonnet-20240229",
+		DisplayName:       "Claude 3 Sonnet",
+		Description:       "Balanced Claude model via direct Anthropic API",
+		MaxTokens:         200000,
+		SupportsStreaming: true,
+	}
+	r.routes["claude-3-haiku-20240307"] = ModelRoute{
+		Provider:          config.ProviderAnthropic,
+		OriginalName:      "claude-3-haiku-20240307",
+		DisplayName:       "Claude 3 Haiku",
+		Description:       "Fast Claude model via direct Anthropic API",
+		MaxTokens:         200000,
 		SupportsStreaming: true,
 	}
 }

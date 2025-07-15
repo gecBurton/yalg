@@ -13,49 +13,49 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeAuthentication   ErrorType = "authentication_error"
-	ErrorTypeAuthorization    ErrorType = "authorization_error"
-	ErrorTypeRateLimit        ErrorType = "rate_limit_error"
-	ErrorTypeInvalidRequest   ErrorType = "invalid_request_error"
-	ErrorTypeModelError       ErrorType = "model_error"
-	ErrorTypeProviderError    ErrorType = "provider_error"
-	ErrorTypeTimeout          ErrorType = "timeout_error"
-	ErrorTypeNetworkError     ErrorType = "network_error"
-	ErrorTypeInternalError    ErrorType = "internal_server_error"
-	ErrorTypeQuotaExceeded    ErrorType = "quota_exceeded_error"
-	ErrorTypeSafetyError      ErrorType = "safety_error"
-	ErrorTypeValidationError  ErrorType = "validation_error"
+	ErrorTypeAuthentication  ErrorType = "authentication_error"
+	ErrorTypeAuthorization   ErrorType = "authorization_error"
+	ErrorTypeRateLimit       ErrorType = "rate_limit_error"
+	ErrorTypeInvalidRequest  ErrorType = "invalid_request_error"
+	ErrorTypeModelError      ErrorType = "model_error"
+	ErrorTypeProviderError   ErrorType = "provider_error"
+	ErrorTypeTimeout         ErrorType = "timeout_error"
+	ErrorTypeNetworkError    ErrorType = "network_error"
+	ErrorTypeInternalError   ErrorType = "internal_server_error"
+	ErrorTypeQuotaExceeded   ErrorType = "quota_exceeded_error"
+	ErrorTypeSafetyError     ErrorType = "safety_error"
+	ErrorTypeValidationError ErrorType = "validation_error"
 )
 
 // ErrorCode represents specific error codes
 type ErrorCode string
 
 const (
-	CodeInvalidAPIKey         ErrorCode = "invalid_api_key"
-	CodeInsufficientQuota     ErrorCode = "insufficient_quota"
-	CodeModelNotFound         ErrorCode = "model_not_found"
-	CodeTokenLimitExceeded    ErrorCode = "token_limit_exceeded"
-	CodeContentFiltered       ErrorCode = "content_filtered"
-	CodeProviderUnavailable   ErrorCode = "provider_unavailable"
-	CodeRequestTimeout        ErrorCode = "request_timeout"
-	CodeInvalidModel          ErrorCode = "invalid_model"
-	CodeMissingParameter      ErrorCode = "missing_parameter"
-	CodeInvalidParameter      ErrorCode = "invalid_parameter"
-	CodeConnectionFailed      ErrorCode = "connection_failed"
-	CodeServerOverloaded      ErrorCode = "server_overloaded"
+	CodeInvalidAPIKey       ErrorCode = "invalid_api_key"
+	CodeInsufficientQuota   ErrorCode = "insufficient_quota"
+	CodeModelNotFound       ErrorCode = "model_not_found"
+	CodeTokenLimitExceeded  ErrorCode = "token_limit_exceeded"
+	CodeContentFiltered     ErrorCode = "content_filtered"
+	CodeProviderUnavailable ErrorCode = "provider_unavailable"
+	CodeRequestTimeout      ErrorCode = "request_timeout"
+	CodeInvalidModel        ErrorCode = "invalid_model"
+	CodeMissingParameter    ErrorCode = "missing_parameter"
+	CodeInvalidParameter    ErrorCode = "invalid_parameter"
+	CodeConnectionFailed    ErrorCode = "connection_failed"
+	CodeServerOverloaded    ErrorCode = "server_overloaded"
 )
 
 // ProviderError represents a provider-specific error
 type ProviderError struct {
-	Provider     config.ProviderType `json:"provider"`
-	Type         ErrorType           `json:"type"`
-	Code         ErrorCode           `json:"code"`
-	Message      string              `json:"message"`
-	Details      map[string]interface{} `json:"details,omitempty"`
-	Retryable    bool                `json:"retryable"`
-	RetryAfter   int                 `json:"retry_after,omitempty"` // seconds
-	HTTPStatus   int                 `json:"http_status"`
-	OriginalError string             `json:"original_error,omitempty"`
+	Provider      config.ProviderType    `json:"provider"`
+	Type          ErrorType              `json:"type"`
+	Code          ErrorCode              `json:"code"`
+	Message       string                 `json:"message"`
+	Details       map[string]interface{} `json:"details,omitempty"`
+	Retryable     bool                   `json:"retryable"`
+	RetryAfter    int                    `json:"retry_after,omitempty"` // seconds
+	HTTPStatus    int                    `json:"http_status"`
+	OriginalError string                 `json:"original_error,omitempty"`
 }
 
 // Error implements the error interface
@@ -377,12 +377,12 @@ func (eh *ErrorHandler) LogError(err *ProviderError, requestID string, additiona
 	}
 
 	logData := map[string]interface{}{
-		"request_id": requestID,
-		"provider":   err.Provider,
-		"error_type": err.Type,
-		"error_code": err.Code,
-		"message":    err.Message,
-		"retryable":  err.Retryable,
+		"request_id":  requestID,
+		"provider":    err.Provider,
+		"error_type":  err.Type,
+		"error_code":  err.Code,
+		"message":     err.Message,
+		"retryable":   err.Retryable,
 		"http_status": err.HTTPStatus,
 	}
 
@@ -405,6 +405,6 @@ func (eh *ErrorHandler) LogError(err *ProviderError, requestID string, additiona
 	}
 
 	// Fallback to simple text logging
-	fmt.Printf("ERROR [%s]: %s (%s/%s) - %s\n", 
+	fmt.Printf("ERROR [%s]: %s (%s/%s) - %s\n",
 		requestID, err.Provider, err.Type, err.Code, err.Message)
 }

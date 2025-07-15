@@ -14,6 +14,7 @@ import (
 	"llm-freeway/internal/router"
 	"llm-freeway/internal/server"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/google/generative-ai-go/genai"
@@ -48,16 +49,19 @@ func main() {
 	openaiClient := initializeAzureOpenAI(cfg)
 	bedrockClient := initializeAWSBedrock(cfg)
 	geminiClient := initializeGoogleAI(cfg)
+	awsCfg := initializeAWSConfig(cfg)
 
 	// Create and configure server
 	srv := server.NewServer(server.ServerConfig{
-		Config:        cfg,
-		BedrockClient: bedrockClient,
-		GeminiClient:  geminiClient,
-		OpenAIClient:  openaiClient,
-		Database:      db,
-		ErrorHandler:  errorHandler,
-		Router:        modelRouter,
+		Config:          cfg,
+		BedrockClient:   bedrockClient,
+		GeminiClient:    geminiClient,
+		OpenAIClient:    openaiClient,
+		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
+		AWSConfig:       awsCfg,
+		Database:        db,
+		ErrorHandler:    errorHandler,
+		Router:          modelRouter,
 	})
 
 	setupRoutes(srv, authMiddleware, authHandlers)
@@ -129,6 +133,22 @@ func initializeAWSBedrock(cfg *config.Config) *bedrockruntime.Client {
 
 	log.Printf("AWS Bedrock client initialized")
 	return bedrockruntime.NewFromConfig(awsCfg)
+}
+
+func initializeAWSConfig(cfg *config.Config) *aws.Config {
+	// Load AWS config for use with the unified Claude adapter
+	if !cfg.IsProviderEnabled(config.ProviderAWSBedrock) {
+		return nil
+	}
+
+	awsCfg, err := awsConfig.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Printf("Warning: Failed to load AWS config: %v", err)
+		return nil
+	}
+
+	log.Printf("AWS config initialized for unified Claude adapter")
+	return &awsCfg
 }
 
 func initializeGoogleAI(cfg *config.Config) *genai.Client {
@@ -222,6 +242,9 @@ func logServerStatus(cfg *config.Config, db *database.DB, port string) {
 	}
 	if cfg.IsProviderEnabled(config.ProviderGoogleAI) {
 		enabledProviders = append(enabledProviders, "Google AI")
+	}
+	if cfg.IsProviderEnabled(config.ProviderAnthropic) {
+		enabledProviders = append(enabledProviders, "Anthropic")
 	}
 
 	log.Printf("Starting LLM Freeway server on port %s", port)
