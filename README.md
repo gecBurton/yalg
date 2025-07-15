@@ -22,8 +22,11 @@ cd llm-freeway
 go build
 
 # Configure providers in .env
-AZURE_OPENAI_API_KEY=your_key
-AZURE_OPENAI_ENDPOINT=your_endpoint
+AZURE_OPENAI_API_KEY=your_azure_key
+AZURE_OPENAI_ENDPOINT=your_azure_endpoint
+OPENAI_API_KEY=your_openai_key
+ANTHROPIC_API_KEY=your_anthropic_key
+GEMINI_API_KEY=your_gemini_key
 OIDC_CLIENT_ID=your_client_id
 OIDC_CLIENT_SECRET=your_secret
 ```
@@ -72,6 +75,16 @@ models:
     supports_streaming: true
     enabled: true
     rate_limit: 50
+
+  openai-gpt-4o:
+    provider: openai
+    model_name: "gpt-4o"
+    display_name: "GPT-4o (OpenAI)"
+    description: "Most capable GPT-4 model via direct OpenAI API"
+    max_tokens: 128000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 80
 ```
 
 **Key Features:**
@@ -90,7 +103,7 @@ curl -X POST http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
-    "model": "my-favorite-claude",
+    "model": "openai-gpt-4o",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```

@@ -11,6 +11,7 @@ type ProviderType string
 
 const (
 	ProviderAzureOpenAI ProviderType = "azure-openai"
+	ProviderOpenAI      ProviderType = "openai"
 	ProviderAWSBedrock  ProviderType = "aws-bedrock"
 	ProviderGoogleAI    ProviderType = "google-ai"
 	ProviderAnthropic   ProviderType = "anthropic"

@@ -168,6 +168,8 @@ func (r *Router) initializeRoutesFromConfig() {
 		switch modelEntry.Provider {
 		case "azure-openai":
 			provider = config.ProviderAzureOpenAI
+		case "openai":
+			provider = config.ProviderOpenAI
 		case "aws-bedrock":
 			provider = config.ProviderAWSBedrock
 		case "anthropic":

@@ -124,7 +124,6 @@ func (h *AuthHandlers) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		ID:          user.ID,
 		Email:       user.Email,
 		DisplayName: user.DisplayName,
-		Name:        user.Name,
 	}
 
 	if err := h.database.CreateOrUpdateUser(dbUser); err != nil {

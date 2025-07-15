@@ -60,26 +60,28 @@ type ErrorResponse struct {
 
 // ServerConfig holds configuration for the server
 type ServerConfig struct {
-	Config          *config.Config
-	BedrockClient   *bedrockruntime.Client
-	GeminiClient    *genai.Client
-	OpenAIClient    *openai.Client
-	AnthropicAPIKey string
-	AWSConfig       *aws.Config
-	Database        *database.DB
-	ErrorHandler    *errors.ErrorHandler
-	Router          *router.Router
+	Config            *config.Config
+	BedrockClient     *bedrockruntime.Client
+	GeminiClient      *genai.Client
+	AzureOpenAIClient *openai.Client
+	DirectOpenAIClient *openai.Client
+	AnthropicAPIKey   string
+	AWSConfig         *aws.Config
+	Database          *database.DB
+	ErrorHandler      *errors.ErrorHandler
+	Router            *router.Router
 }
 
 // Server provides LLM gateway functionality with metrics, rate limiting, etc.
 type Server struct {
-	claudeAdapter *adapter.ClaudeAdapter
-	geminiAdapter *adapter.GeminiAdapter
-	openaiClient  *openai.Client
-	config        *config.Config
-	database      *database.DB
-	errorHandler  *errors.ErrorHandler
-	router        *router.Router
+	claudeAdapter      *adapter.ClaudeAdapter
+	geminiAdapter      *adapter.GeminiAdapter
+	azureOpenAIClient  *openai.Client
+	directOpenAIClient *openai.Client
+	config             *config.Config
+	database           *database.DB
+	errorHandler       *errors.ErrorHandler
+	router             *router.Router
 }
 
 // NewServer creates a new server instance with all components
@@ -96,13 +98,14 @@ func NewServer(cfg ServerConfig) *Server {
 	})
 
 	return &Server{
-		claudeAdapter: claudeAdapter,
-		geminiAdapter: geminiAdapter,
-		openaiClient:  cfg.OpenAIClient,
-		config:        cfg.Config,
-		database:      cfg.Database,
-		errorHandler:  cfg.ErrorHandler,
-		router:        cfg.Router,
+		claudeAdapter:      claudeAdapter,
+		geminiAdapter:      geminiAdapter,
+		azureOpenAIClient:  cfg.AzureOpenAIClient,
+		directOpenAIClient: cfg.DirectOpenAIClient,
+		config:             cfg.Config,
+		database:           cfg.Database,
+		errorHandler:       cfg.ErrorHandler,
+		router:             cfg.Router,
 	}
 }
 
@@ -131,6 +134,7 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now(),
 		"providers": map[string]any{
 			"azure_openai": s.config.IsProviderEnabled(config.ProviderAzureOpenAI),
+			"openai":       s.config.IsProviderEnabled(config.ProviderOpenAI),
 			"aws_bedrock":  s.config.IsProviderEnabled(config.ProviderAWSBedrock),
 			"google_ai":    s.config.IsProviderEnabled(config.ProviderGoogleAI),
 			"anthropic":    s.config.IsProviderEnabled(config.ProviderAnthropic),
@@ -275,6 +279,8 @@ func (s *Server) ChatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		responseErr = s.handleProviderRequest(apiReq, w, &metric, s.handleGemini)
 	case config.ProviderAzureOpenAI:
 		responseErr = s.handleProviderRequest(apiReq, w, &metric, s.handleOpenAI)
+	case config.ProviderOpenAI:
+		responseErr = s.handleProviderRequest(apiReq, w, &metric, s.handleOpenAI)
 	default:
 		providerErr := s.errorHandler.CreateValidationError(
 			provider,
@@ -398,30 +404,54 @@ func (s *Server) handleGemini(req adapter.ChatRequest, w http.ResponseWriter, me
 	return nil
 }
 
-// handleOpenAI processes requests for Azure OpenAI models
+// getOpenAIClient returns the appropriate OpenAI client based on provider
+func (s *Server) getOpenAIClient(provider config.ProviderType) (*openai.Client, error) {
+	switch provider {
+	case config.ProviderAzureOpenAI:
+		if s.azureOpenAIClient == nil {
+			return nil, fmt.Errorf("Azure OpenAI client not available - missing API key or endpoint configuration")
+		}
+		return s.azureOpenAIClient, nil
+	case config.ProviderOpenAI:
+		if s.directOpenAIClient == nil {
+			return nil, fmt.Errorf("OpenAI client not available - missing API key configuration")
+		}
+		return s.directOpenAIClient, nil
+	default:
+		return nil, fmt.Errorf("unsupported OpenAI provider: %s", provider)
+	}
+}
+
+// handleOpenAI processes requests for OpenAI models (both Azure and direct)
 func (s *Server) handleOpenAI(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics) error {
-	if s.openaiClient == nil {
-		err := fmt.Errorf("Azure OpenAI client not available - missing API key or endpoint configuration")
-		return s.errorHandler.HandleError(err, config.ProviderAzureOpenAI, map[string]any{"model": req.Model})
+	// Determine provider from model route
+	provider, err := s.router.DetectProvider(req.Model)
+	if err != nil {
+		return s.errorHandler.HandleError(err, config.ProviderOpenAI, map[string]any{"model": req.Model})
+	}
+	
+	client, err := s.getOpenAIClient(provider)
+	if err != nil {
+		return s.errorHandler.HandleError(err, provider, map[string]any{"model": req.Model})
 	}
 
-	log.Printf("Routing to Azure OpenAI model: %s", req.Model)
+	log.Printf("Routing to OpenAI model: %s via provider: %s", req.Model, provider)
 	messages := s.ConvertToOpenAIMessages(req.Messages)
 
 	if req.Stream {
 		return s.handleStreamingRequest(req, w, metric, func() error {
-			return s.handleOpenAIStreaming(messages, req.Model, w)
+			return s.handleOpenAIStreaming(messages, req.Model, w, client)
 		})
 	}
 
 	// Handle non-streaming
-	completion, err := s.openaiClient.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
+	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Messages: messages,
 		Model:    req.Model,
 	})
 
 	if err != nil {
-		return s.handleNonStreamingError(err, w, metric, req.Model, config.ProviderAzureOpenAI)
+		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
 	}
 
 	// Extract token usage for metrics
@@ -478,8 +508,8 @@ func (s *Server) handleNonStreamingError(err error, w http.ResponseWriter, metri
 }
 
 // handleOpenAIStreaming handles streaming for OpenAI
-func (s *Server) handleOpenAIStreaming(messages []openai.ChatCompletionMessageParamUnion, model string, w http.ResponseWriter) error {
-	stream := s.openaiClient.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
+func (s *Server) handleOpenAIStreaming(messages []openai.ChatCompletionMessageParamUnion, model string, w http.ResponseWriter, client *openai.Client) error {
+	stream := client.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
 		Messages: messages,
 		Model:    model,
 	})

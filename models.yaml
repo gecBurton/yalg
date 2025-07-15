@@ -118,6 +118,47 @@ models:
     enabled: true
     rate_limit: 30
 
+  # Direct OpenAI Models (via OpenAI API)
+  openai-gpt-4o:
+    provider: openai
+    model_name: "gpt-4o"
+    display_name: "GPT-4o (OpenAI)"
+    description: "Most capable GPT-4 model via direct OpenAI API"
+    max_tokens: 128000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 80
+
+  openai-gpt-4o-mini:
+    provider: openai
+    model_name: "gpt-4o-mini"
+    display_name: "GPT-4o Mini (OpenAI)"
+    description: "Fast and efficient GPT-4 model via direct OpenAI API"
+    max_tokens: 128000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 100
+
+  openai-gpt-4:
+    provider: openai
+    model_name: "gpt-4"
+    display_name: "GPT-4 (OpenAI)"
+    description: "Standard GPT-4 model via direct OpenAI API"
+    max_tokens: 8192
+    supports_streaming: true
+    enabled: true
+    rate_limit: 40
+
+  openai-gpt-3-5-turbo:
+    provider: openai
+    model_name: "gpt-3.5-turbo"
+    display_name: "GPT-3.5 Turbo (OpenAI)"
+    description: "Fast, inexpensive model via direct OpenAI API"
+    max_tokens: 16385
+    supports_streaming: true
+    enabled: true
+    rate_limit: 120
+
   # Google AI Models
   gemini-1-5-pro:
     provider: google-ai

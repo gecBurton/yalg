@@ -154,7 +154,7 @@ func TestClaudeAdapter_getClientForModel_MissingClients(t *testing.T) {
 			hasBedrockClient: false,
 			model:            "aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
 			expectError:      true,
-			errorMsg:         "Bedrock client not configured",
+			errorMsg:         "bedrock client not configured",
 		},
 	}
 

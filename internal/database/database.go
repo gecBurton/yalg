@@ -35,10 +35,6 @@ type User struct {
 	ID          string     `gorm:"primaryKey;size:100" json:"id"`
 	Email       string     `gorm:"uniqueIndex;size:255;not null" json:"email"`
 	DisplayName string     `gorm:"size:255" json:"display_name"`
-	Name        string     `gorm:"size:255" json:"name"`
-	GivenName   string     `gorm:"size:255" json:"given_name"`
-	FamilyName  string     `gorm:"size:255" json:"family_name"`
-	Nickname    string     `gorm:"size:255" json:"nickname"`
 	LastLoginAt *time.Time `gorm:"index" json:"last_login_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

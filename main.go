@@ -21,7 +21,8 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/azure"
-	"google.golang.org/api/option"
+	"github.com/openai/openai-go/option"
+	googleOption "google.golang.org/api/option"
 )
 
 const (
@@ -46,22 +47,24 @@ func main() {
 	authMiddleware, authHandlers := initializeAuthentication(cfg, db)
 
 	// Initialize provider clients
-	openaiClient := initializeAzureOpenAI(cfg)
+	azureOpenAIClient := initializeAzureOpenAI(cfg)
+	directOpenAIClient := initializeOpenAI(cfg)
 	bedrockClient := initializeAWSBedrock(cfg)
 	geminiClient := initializeGoogleAI(cfg)
 	awsCfg := initializeAWSConfig(cfg)
 
 	// Create and configure server
 	srv := server.NewServer(server.ServerConfig{
-		Config:          cfg,
-		BedrockClient:   bedrockClient,
-		GeminiClient:    geminiClient,
-		OpenAIClient:    openaiClient,
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
-		AWSConfig:       awsCfg,
-		Database:        db,
-		ErrorHandler:    errorHandler,
-		Router:          modelRouter,
+		Config:             cfg,
+		BedrockClient:      bedrockClient,
+		GeminiClient:       geminiClient,
+		AzureOpenAIClient:  azureOpenAIClient,
+		DirectOpenAIClient: directOpenAIClient,
+		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
+		AWSConfig:          awsCfg,
+		Database:           db,
+		ErrorHandler:       errorHandler,
+		Router:             modelRouter,
 	})
 
 	setupRoutes(srv, authMiddleware, authHandlers)
@@ -120,6 +123,22 @@ func initializeAzureOpenAI(cfg *config.Config) *openai.Client {
 	return &client
 }
 
+func initializeOpenAI(cfg *config.Config) *openai.Client {
+	if !cfg.IsProviderEnabled(config.ProviderOpenAI) {
+		return nil
+	}
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		log.Printf("OpenAI enabled but missing OPENAI_API_KEY")
+		return nil
+	}
+
+	client := openai.NewClient(option.WithAPIKey(apiKey))
+	log.Printf("OpenAI client initialized")
+	return &client
+}
+
 func initializeAWSBedrock(cfg *config.Config) *bedrockruntime.Client {
 	if !cfg.IsProviderEnabled(config.ProviderAWSBedrock) {
 		return nil
@@ -162,7 +181,7 @@ func initializeGoogleAI(cfg *config.Config) *genai.Client {
 		return nil
 	}
 
-	client, err := genai.NewClient(context.Background(), option.WithAPIKey(apiKey))
+	client, err := genai.NewClient(context.Background(), googleOption.WithAPIKey(apiKey))
 	if err != nil {
 		log.Printf("Warning: Failed to create Gemini client: %v", err)
 		return nil
