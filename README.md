@@ -34,12 +34,55 @@ OIDC_CLIENT_SECRET=your_secret
 # Web UI: http://localhost:3000
 ```
 
+## Configuration
+
+### Model Configuration (models.yaml)
+
+The gateway uses a `models.yaml` file to configure available models with custom route names:
+
+```yaml
+models:
+  # Custom route names that map to actual models
+  gpt-4o:
+    provider: azure-openai
+    model_name: "gpt-4o"
+    display_name: "GPT-4o"
+    description: "OpenAI's most capable model"
+    max_tokens: 128000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 100
+
+  my-favorite-claude:
+    provider: anthropic
+    model_name: "claude-3-5-sonnet-20241022"
+    display_name: "My Favorite Claude"
+    description: "Anthropic's Claude via direct API"
+    max_tokens: 200000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 30
+
+  claude-bedrock:
+    provider: aws-bedrock
+    model_name: "anthropic.claude-3-sonnet-20240229-v1:0"
+    display_name: "Claude via Bedrock"
+    description: "Anthropic's Claude via AWS Bedrock"
+    max_tokens: 200000
+    supports_streaming: true
+    enabled: true
+    rate_limit: 50
+```
+
+**Key Features:**
+- **Custom Route Names**: Use any name you want (e.g., `my-favorite-claude`)
+- **Multiple Instances**: Configure the same model multiple times with different settings
+- **Model-specific Rate Limits**: Each model can have its own rate limit
+- **Flexible Configuration**: Easy to add, remove, or modify models
+
 ## API Usage
 
-All models require explicit provider prefixes:
-- **Azure OpenAI**: `azure-openai/gpt-4o-mini`
-- **AWS Bedrock**: `aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0`  
-- **Google AI**: `google-ai/gemini-1.5-pro`
+Use the custom route names defined in your `models.yaml`:
 
 ### cURL Example
 ```bash
@@ -47,7 +90,7 @@ curl -X POST http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
-    "model": "azure-openai/gpt-4o-mini",
+    "model": "my-favorite-claude",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -59,6 +102,3 @@ curl -X POST http://localhost:3000/v1/chat/completions \
 - `GET /metrics` - Usage statistics
 - `GET /health` - Health check
 
----
-
-*Note: This README has been simplified. The service includes many more features including detailed metrics, authentication, rate limiting, and cost tracking.*
