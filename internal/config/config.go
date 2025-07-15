@@ -129,6 +129,15 @@ func LoadConfig() *Config {
 				RetryAttempts: getIntEnv("AZURE_OPENAI_RETRY_ATTEMPTS", 3),
 				RetryDelay:    getDurationEnv("AZURE_OPENAI_RETRY_DELAY", 1*time.Second),
 			},
+			ProviderOpenAI: {
+				Enabled:       getBoolEnv("OPENAI_ENABLED", true), // Can be enabled even without API key
+				APIKey:        getEnv("OPENAI_API_KEY", ""),
+				RateLimit:     getIntEnv("OPENAI_RATE_LIMIT", 60),
+				Timeout:       getDurationEnv("OPENAI_TIMEOUT", 30*time.Second),
+				MaxTokens:     getIntEnv("OPENAI_MAX_TOKENS", 4096),
+				RetryAttempts: getIntEnv("OPENAI_RETRY_ATTEMPTS", 3),
+				RetryDelay:    getDurationEnv("OPENAI_RETRY_DELAY", 1*time.Second),
+			},
 			ProviderAWSBedrock: {
 				Enabled:       true, // Enabled if AWS credentials are available
 				Region:        getEnv("AWS_REGION", "us-east-1"),
