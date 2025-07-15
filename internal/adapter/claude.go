@@ -74,7 +74,25 @@ func (a *ClaudeAdapter) IsClaudeModel(model string) bool {
 		strings.HasPrefix(model, "anthropic.")
 }
 
-// getClientForModel returns the appropriate client based on model prefix
+// getClientForProvider returns the appropriate client based on provider type
+func (a *ClaudeAdapter) getClientForProvider(provider string) (*anthropic.Client, error) {
+	switch provider {
+	case "anthropic":
+		if !a.hasDirectClient {
+			return nil, fmt.Errorf("direct Anthropic client not configured - missing API key")
+		}
+		return &a.directClient, nil
+	case "aws-bedrock":
+		if !a.hasBedrockClient {
+			return nil, fmt.Errorf("bedrock client not configured - missing AWS credentials")
+		}
+		return &a.bedrockClient, nil
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
+	}
+}
+
+// getClientForModel returns the appropriate client based on model prefix (deprecated - use getClientForProvider)
 func (a *ClaudeAdapter) getClientForModel(model string) (*anthropic.Client, error) {
 	if strings.HasPrefix(model, "anthropic/") {
 		if !a.hasDirectClient {
@@ -82,14 +100,14 @@ func (a *ClaudeAdapter) getClientForModel(model string) (*anthropic.Client, erro
 		}
 		return &a.directClient, nil
 	}
-	
+
 	if strings.HasPrefix(model, "aws-bedrock/") {
 		if !a.hasBedrockClient {
-			return nil, fmt.Errorf("Bedrock client not configured - missing AWS credentials")
+			return nil, fmt.Errorf("bedrock client not configured - missing AWS credentials")
 		}
 		return &a.bedrockClient, nil
 	}
-	
+
 	return nil, fmt.Errorf("unsupported model prefix: %s", model)
 }
 
@@ -180,8 +198,8 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageSt
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"delta": map[string]interface{}{},
+				"index":         0,
+				"delta":         map[string]any{},
 				"finish_reason": nil,
 			},
 		},
@@ -195,29 +213,29 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageSt
 	case "message_start":
 		// Start of message - add role
 		delta["role"] = "assistant"
-		
+
 	case "content_block_start":
 		// Skip content block start events
-		
+
 	case "content_block_delta":
 		// Content chunk - extract text from delta
 		if event.Delta.Text != "" {
 			delta["content"] = event.Delta.Text
 		}
-		
+
 	case "content_block_stop":
 		// Skip content block stop events
-		
+
 	case "message_delta":
 		// Message completion info
 		if event.Delta.StopReason != "" {
 			choice["finish_reason"] = string(event.Delta.StopReason)
 		}
-		
+
 	case "message_stop":
 		// End of message
 		choice["finish_reason"] = "stop"
-		
+
 	default:
 		// Log unknown event types
 		log.Printf("Unknown stream event type: %s", event.Type)
@@ -226,25 +244,25 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageSt
 	return openaiChunk
 }
 
-// HandleRequest processes non-streaming requests for Claude models
-func (a *ClaudeAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, error) {
-	log.Printf("Processing non-streaming request for Claude model: %s", req.Model)
-	
-	client, err := a.getClientForModel(req.Model)
+// HandleRequestWithProvider processes non-streaming requests for Claude models with explicit provider
+func (a *ClaudeAdapter) HandleRequestWithProvider(req ChatRequest, provider string) (map[string]interface{}, error) {
+	log.Printf("Processing non-streaming request for Claude model: %s via provider: %s", req.Model, provider)
+
+	client, err := a.getClientForProvider(provider)
 	if err != nil {
 		return nil, err
 	}
 
-	normalizedModel := a.normalizeModelName(req.Model)
+	// Model name is already the actual model name (no prefix to remove)
 	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
-	
+
 	// Build the message params
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(normalizedModel),
+		Model:     anthropic.Model(req.Model),
 		MaxTokens: 1000,
 		Messages:  anthropicMessages,
 	}
-	
+
 	if systemMessage != "" {
 		params.System = []anthropic.TextBlockParam{
 			{
@@ -252,9 +270,9 @@ func (a *ClaudeAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 			},
 		}
 	}
-	
+
 	log.Printf("Calling Anthropic API (%s) with %d messages", req.Model, len(anthropicMessages))
-	
+
 	// Call Anthropic API (works for both direct and Bedrock)
 	result, err := client.Messages.New(context.Background(), params)
 	if err != nil {
@@ -266,36 +284,36 @@ func (a *ClaudeAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 
 	// Convert to OpenAI format
 	response := a.ConvertAnthropicToOpenAI(result, req.Model)
-	
+
 	// Log the response structure for debugging
 	if data, err := json.Marshal(response); err == nil {
 		log.Printf("Converted response: %s", string(data))
 	} else {
 		log.Printf("Error marshaling response: %v", err)
 	}
-	
+
 	return response, nil
 }
 
-// HandleStreamingRequest processes streaming requests for Claude models
-func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseWriter) error {
-	log.Printf("Processing streaming request for Claude model: %s", req.Model)
-	
-	client, err := a.getClientForModel(req.Model)
+// HandleStreamingRequestWithProvider processes streaming requests for Claude models with explicit provider
+func (a *ClaudeAdapter) HandleStreamingRequestWithProvider(req ChatRequest, w http.ResponseWriter, provider string) error {
+	log.Printf("Processing streaming request for Claude model: %s via provider: %s", req.Model, provider)
+
+	client, err := a.getClientForProvider(provider)
 	if err != nil {
 		return err
 	}
 
-	normalizedModel := a.normalizeModelName(req.Model)
+	// Model name is already the actual model name (no prefix to remove)
 	anthropicMessages, systemMessage := a.ConvertToAnthropicMessages(req.Messages)
-	
+
 	// Build the message params
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(normalizedModel),
+		Model:     anthropic.Model(req.Model),
 		MaxTokens: 1000,
 		Messages:  anthropicMessages,
 	}
-	
+
 	if systemMessage != "" {
 		params.System = []anthropic.TextBlockParam{
 			{
@@ -303,29 +321,29 @@ func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 			},
 		}
 	}
-	
+
 	log.Printf("Calling Anthropic streaming API (%s) with %d messages", req.Model, len(anthropicMessages))
-	
+
 	// Call Anthropic streaming API (works for both direct and Bedrock)
 	stream := client.Messages.NewStreaming(context.Background(), params)
-	
+
 	// Process the stream
 	eventCount := 0
 	for stream.Next() {
 		event := stream.Current()
 		eventCount++
-		
+
 		log.Printf("Received stream event %d: type=%s", eventCount, event.Type)
-		
+
 		// Convert to OpenAI format
 		openaiChunk := a.ConvertAnthropicStreamToOpenAI(event, req.Model)
-		
+
 		// Skip empty chunks that don't add value
 		choices := openaiChunk["choices"].([]map[string]interface{})
 		if len(choices) > 0 {
 			delta := choices[0]["delta"].(map[string]interface{})
 			finishReason := choices[0]["finish_reason"]
-			
+
 			// Only send chunk if it has content, role, or finish_reason
 			if len(delta) > 0 || finishReason != nil {
 				// Send as SSE
@@ -334,11 +352,11 @@ func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 					log.Printf("Error marshaling chunk: %v", err)
 					continue
 				}
-				
+
 				w.Write([]byte("data: " + string(data) + "\n\n"))
 			}
 		}
-		
+
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -350,9 +368,49 @@ func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 	}
 
 	log.Printf("Stream completed after %d events", eventCount)
-	
+
 	// Send completion marker
 	w.Write([]byte("data: [DONE]\n\n"))
-	
+
 	return nil
+}
+
+// HandleRequest processes non-streaming requests for Claude models (backward compatibility)
+func (a *ClaudeAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, error) {
+	// Try to detect provider from model name for backward compatibility
+	var provider string
+	if strings.HasPrefix(req.Model, "anthropic/") {
+		provider = "anthropic"
+		// Remove prefix for API call
+		req.Model = strings.TrimPrefix(req.Model, "anthropic/")
+	} else if strings.HasPrefix(req.Model, "aws-bedrock/") {
+		provider = "aws-bedrock"
+		// Remove prefix for API call
+		req.Model = strings.TrimPrefix(req.Model, "aws-bedrock/")
+	} else {
+		// Default to aws-bedrock for backward compatibility
+		provider = "aws-bedrock"
+	}
+
+	return a.HandleRequestWithProvider(req, provider)
+}
+
+// HandleStreamingRequest processes streaming requests for Claude models (backward compatibility)
+func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseWriter) error {
+	// Try to detect provider from model name for backward compatibility
+	var provider string
+	if strings.HasPrefix(req.Model, "anthropic/") {
+		provider = "anthropic"
+		// Remove prefix for API call
+		req.Model = strings.TrimPrefix(req.Model, "anthropic/")
+	} else if strings.HasPrefix(req.Model, "aws-bedrock/") {
+		provider = "aws-bedrock"
+		// Remove prefix for API call
+		req.Model = strings.TrimPrefix(req.Model, "aws-bedrock/")
+	} else {
+		// Default to aws-bedrock for backward compatibility
+		provider = "aws-bedrock"
+	}
+
+	return a.HandleStreamingRequestWithProvider(req, w, provider)
 }

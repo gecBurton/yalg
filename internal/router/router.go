@@ -2,25 +2,49 @@ package router
 
 import (
 	"fmt"
-	"strings"
+	"log"
+	"os"
+	"path/filepath"
 
 	"llm-freeway/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // ModelRoute contains routing information for a model
 type ModelRoute struct {
-	Provider     config.ProviderType `json:"provider"`
-	OriginalName string              `json:"original_name"`
-	DisplayName  string              `json:"display_name"`
-	Description  string              `json:"description"`
-	MaxTokens    int                 `json:"max_tokens"`
-	SupportsStreaming bool           `json:"supports_streaming"`
+	Provider          config.ProviderType `json:"provider" yaml:"provider"`
+	ModelName         string              `json:"model_name" yaml:"model_name"`         // Actual model name for API calls
+	RouteName         string              `json:"route_name" yaml:"route_name"`         // Custom route name for requests
+	DisplayName       string              `json:"display_name" yaml:"display_name"`
+	Description       string              `json:"description" yaml:"description"`
+	MaxTokens         int                 `json:"max_tokens" yaml:"max_tokens"`
+	SupportsStreaming bool                `json:"supports_streaming" yaml:"supports_streaming"`
+	Enabled           bool                `json:"enabled" yaml:"enabled"`
+	RateLimit         int                 `json:"rate_limit" yaml:"rate_limit"`
+}
+
+// ModelConfig represents the structure of the models.yaml file
+type ModelConfig struct {
+	Models map[string]ModelConfigEntry `yaml:"models"`
+}
+
+// ModelConfigEntry represents a model entry in the config file
+type ModelConfigEntry struct {
+	Provider          string `yaml:"provider"`
+	ModelName         string `yaml:"model_name"`
+	DisplayName       string `yaml:"display_name"`
+	Description       string `yaml:"description"`
+	MaxTokens         int    `yaml:"max_tokens"`
+	SupportsStreaming bool   `yaml:"supports_streaming"`
+	Enabled           bool   `yaml:"enabled"`
+	RateLimit         int    `yaml:"rate_limit"`
 }
 
 // Router handles model detection and routing
 type Router struct {
-	config *config.Config
-	routes map[string]ModelRoute
+	config      *config.Config
+	routes      map[string]ModelRoute
+	modelConfig *ModelConfig
 }
 
 // NewRouter creates a new model router
@@ -30,34 +54,22 @@ func NewRouter(cfg *config.Config) *Router {
 		routes: make(map[string]ModelRoute),
 	}
 	
-	router.initializeRoutes()
+	if err := router.loadModelConfig(); err != nil {
+		log.Fatalf("Failed to load models configuration: %v. Please ensure models.yaml exists in the current directory.", err)
+	}
+	
+	router.initializeRoutesFromConfig()
 	return router
 }
 
-// DetectProvider determines the provider from a model name (explicit routing only)
-func (r *Router) DetectProvider(model string) (config.ProviderType, error) {
-	// Only handle explicitly prefixed model names (e.g., "azure-openai/gpt-4", "aws-bedrock/claude-3", "google-ai/gemini-1.5-pro")
-	if strings.Contains(model, "/") {
-		parts := strings.SplitN(model, "/", 2)
-		prefix := strings.ToLower(parts[0])
-		
-		switch prefix {
-		case "azure-openai":
-			return config.ProviderAzureOpenAI, nil
-		case "aws-bedrock":
-			return config.ProviderAWSBedrock, nil
-		case "google-ai":
-			return config.ProviderGoogleAI, nil
-		case "anthropic":
-			return config.ProviderAnthropic, nil
-		default:
-			return "", fmt.Errorf("unsupported provider prefix '%s' in model '%s' - supported prefixes: azure-openai, aws-bedrock, google-ai, anthropic", prefix, model)
-		}
+// DetectProvider determines the provider from a route name
+func (r *Router) DetectProvider(routeName string) (config.ProviderType, error) {
+	// Look up the route in our configuration
+	if route, exists := r.routes[routeName]; exists {
+		return route.Provider, nil
 	}
 	
-	// No provider prefix found
-	return "", fmt.Errorf("model '%s' requires explicit provider prefix (e.g., 'azure-openai/%s', 'aws-bedrock/%s', 'google-ai/%s', 'anthropic/%s')", 
-		model, model, model, model, model)
+	return "", fmt.Errorf("route '%s' not found in model configuration", routeName)
 }
 
 
@@ -66,7 +78,8 @@ func (r *Router) GetAvailableModels() map[config.ProviderType][]ModelRoute {
 	result := make(map[config.ProviderType][]ModelRoute)
 	
 	for _, route := range r.routes {
-		if r.config.IsProviderEnabled(route.Provider) {
+		// Check if provider is enabled in config AND model is enabled
+		if r.config.IsProviderEnabled(route.Provider) && route.Enabled {
 			result[route.Provider] = append(result[route.Provider], route)
 		}
 	}
@@ -74,21 +87,17 @@ func (r *Router) GetAvailableModels() map[config.ProviderType][]ModelRoute {
 	return result
 }
 
-// NormalizeModelName converts prefixed model names to their canonical form
-func (r *Router) NormalizeModelName(model string) string {
-	// Remove provider prefix if present
-	if strings.Contains(model, "/") {
-		parts := strings.SplitN(model, "/", 2)
-		if len(parts) == 2 {
-			return parts[1]
-		}
+// GetModelName returns the actual model name for API calls from a route name
+func (r *Router) GetModelName(routeName string) (string, error) {
+	if route, exists := r.routes[routeName]; exists {
+		return route.ModelName, nil
 	}
-	return model
+	return "", fmt.Errorf("route '%s' not found in model configuration", routeName)
 }
 
-// ValidateModel checks if a model is supported and enabled (requires explicit provider prefix)
-func (r *Router) ValidateModel(model string) error {
-	provider, err := r.DetectProvider(model)
+// ValidateModel checks if a route name is supported and enabled
+func (r *Router) ValidateModel(routeName string) error {
+	provider, err := r.DetectProvider(routeName)
 	if err != nil {
 		return err
 	}
@@ -97,11 +106,15 @@ func (r *Router) ValidateModel(model string) error {
 		return fmt.Errorf("provider %s is not enabled or configured", provider)
 	}
 	
-	normalizedModel := r.NormalizeModelName(model)
+	// Check if route exists in our routes - EXACT MATCH ONLY
+	route, exists := r.routes[routeName]
+	if !exists {
+		return fmt.Errorf("route '%s' is not supported", routeName)
+	}
 	
-	// Check if model exists in our routes - EXACT MATCH ONLY
-	if _, exists := r.routes[normalizedModel]; !exists {
-		return fmt.Errorf("model %s is not supported for provider %s", normalizedModel, provider)
+	// Check if model is enabled
+	if !route.Enabled {
+		return fmt.Errorf("route '%s' is disabled", routeName)
 	}
 	
 	return nil
@@ -110,165 +123,77 @@ func (r *Router) ValidateModel(model string) error {
 
 // Private methods
 
-func (r *Router) initializeRoutes() {
-	// Azure OpenAI models
-	r.routes["gpt-35-turbo"] = ModelRoute{
-		Provider:          config.ProviderAzureOpenAI,
-		OriginalName:      "gpt-35-turbo",
-		DisplayName:       "GPT-3.5 Turbo",
-		Description:       "Fast, efficient model for simple tasks",
-		MaxTokens:         4096,
-		SupportsStreaming: true,
-	}
-	r.routes["gpt-4"] = ModelRoute{
-		Provider:          config.ProviderAzureOpenAI,
-		OriginalName:      "gpt-4",
-		DisplayName:       "GPT-4",
-		Description:       "Most capable GPT-4 model for complex tasks",
-		MaxTokens:         8192,
-		SupportsStreaming: true,
-	}
-	r.routes["gpt-4-turbo"] = ModelRoute{
-		Provider:          config.ProviderAzureOpenAI,
-		OriginalName:      "gpt-4-turbo",
-		DisplayName:       "GPT-4 Turbo",
-		Description:       "Latest GPT-4 model with improved speed",
-		MaxTokens:         128000,
-		SupportsStreaming: true,
-	}
-	r.routes["gpt-4o"] = ModelRoute{
-		Provider:          config.ProviderAzureOpenAI,
-		OriginalName:      "gpt-4o",
-		DisplayName:       "GPT-4o",
-		Description:       "Omni-modal GPT-4 model",
-		MaxTokens:         128000,
-		SupportsStreaming: true,
-	}
-	r.routes["gpt-4o-mini"] = ModelRoute{
-		Provider:          config.ProviderAzureOpenAI,
-		OriginalName:      "gpt-4o-mini",
-		DisplayName:       "GPT-4o Mini",
-		Description:       "Smaller, faster version of GPT-4o",
-		MaxTokens:         128000,
-		SupportsStreaming: true,
+// loadModelConfig loads model configuration from models.yaml
+func (r *Router) loadModelConfig() error {
+	// Try to find models.yaml in multiple locations relative to the project root
+	possiblePaths := []string{
+		"models.yaml",                    // Current directory
+		"./models.yaml",                 // Explicit current directory
+		"../../models.yaml",             // For tests running from subdirectories
+		"../../../models.yaml",          // For deeply nested tests
+		filepath.Join("..", "..", "models.yaml"), // Alternative path for tests
 	}
 	
-	// AWS Bedrock (Anthropic) models
-	r.routes["anthropic.claude-3-haiku-20240307-v1:0"] = ModelRoute{
-		Provider:          config.ProviderAWSBedrock,
-		OriginalName:      "anthropic.claude-3-haiku-20240307-v1:0",
-		DisplayName:       "Claude 3 Haiku",
-		Description:       "Fast and efficient model for simple tasks",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["anthropic.claude-3-sonnet-20240229-v1:0"] = ModelRoute{
-		Provider:          config.ProviderAWSBedrock,
-		OriginalName:      "anthropic.claude-3-sonnet-20240229-v1:0",
-		DisplayName:       "Claude 3 Sonnet",
-		Description:       "Balanced model for most use cases",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["anthropic.claude-3-opus-20240229-v1:0"] = ModelRoute{
-		Provider:          config.ProviderAWSBedrock,
-		OriginalName:      "anthropic.claude-3-opus-20240229-v1:0",
-		DisplayName:       "Claude 3 Opus",
-		Description:       "Most capable Claude model for complex reasoning",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["anthropic.claude-3-5-sonnet-20240620-v1:0"] = ModelRoute{
-		Provider:          config.ProviderAWSBedrock,
-		OriginalName:      "anthropic.claude-3-5-sonnet-20240620-v1:0",
-		DisplayName:       "Claude 3.5 Sonnet",
-		Description:       "Enhanced Claude 3.5 model with improved capabilities",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["anthropic.claude-3-5-sonnet-20241022-v2:0"] = ModelRoute{
-		Provider:          config.ProviderAWSBedrock,
-		OriginalName:      "anthropic.claude-3-5-sonnet-20241022-v2:0",
-		DisplayName:       "Claude 3.5 Sonnet v2",
-		Description:       "Latest Claude 3.5 model with latest improvements",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
+	var configPath string
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			configPath = path
+			break
+		}
 	}
 	
-	// Google AI models
-	r.routes["gemini-1.5-pro"] = ModelRoute{
-		Provider:          config.ProviderGoogleAI,
-		OriginalName:      "gemini-1.5-pro",
-		DisplayName:       "Gemini 1.5 Pro",
-		Description:       "Most capable Gemini model for complex tasks",
-		MaxTokens:         2097152, // 2M tokens
-		SupportsStreaming: true,
-	}
-	r.routes["gemini-1.5-flash"] = ModelRoute{
-		Provider:          config.ProviderGoogleAI,
-		OriginalName:      "gemini-1.5-flash",
-		DisplayName:       "Gemini 1.5 Flash",
-		Description:       "Fast and efficient Gemini model",
-		MaxTokens:         1048576, // 1M tokens
-		SupportsStreaming: true,
-	}
-	r.routes["gemini-2.0-flash-exp"] = ModelRoute{
-		Provider:          config.ProviderGoogleAI,
-		OriginalName:      "gemini-2.0-flash-exp",
-		DisplayName:       "Gemini 2.0 Flash (Experimental)",
-		Description:       "Experimental next-generation Gemini model",
-		MaxTokens:         1048576, // 1M tokens
-		SupportsStreaming: true,
-	}
-	r.routes["gemini-1.0-pro"] = ModelRoute{
-		Provider:          config.ProviderGoogleAI,
-		OriginalName:      "gemini-1.0-pro",
-		DisplayName:       "Gemini 1.0 Pro",
-		Description:       "Original Gemini Pro model",
-		MaxTokens:         32768,
-		SupportsStreaming: true,
+	if configPath == "" {
+		return fmt.Errorf("models.yaml not found in any of: %v", possiblePaths)
 	}
 	
-	// Direct Anthropic models
-	r.routes["claude-3-5-sonnet-20241022"] = ModelRoute{
-		Provider:          config.ProviderAnthropic,
-		OriginalName:      "claude-3-5-sonnet-20241022",
-		DisplayName:       "Claude 3.5 Sonnet",
-		Description:       "Latest Claude 3.5 model via direct Anthropic API",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", configPath, err)
 	}
-	r.routes["claude-3-5-haiku-20241022"] = ModelRoute{
-		Provider:          config.ProviderAnthropic,
-		OriginalName:      "claude-3-5-haiku-20241022",
-		DisplayName:       "Claude 3.5 Haiku",
-		Description:       "Fast and efficient Claude 3.5 model via direct Anthropic API",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
+	
+	r.modelConfig = &ModelConfig{}
+	if err := yaml.Unmarshal(data, r.modelConfig); err != nil {
+		return fmt.Errorf("failed to parse %s: %w", configPath, err)
 	}
-	r.routes["claude-3-opus-20240229"] = ModelRoute{
-		Provider:          config.ProviderAnthropic,
-		OriginalName:      "claude-3-opus-20240229",
-		DisplayName:       "Claude 3 Opus",
-		Description:       "Most capable Claude model via direct Anthropic API",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["claude-3-sonnet-20240229"] = ModelRoute{
-		Provider:          config.ProviderAnthropic,
-		OriginalName:      "claude-3-sonnet-20240229",
-		DisplayName:       "Claude 3 Sonnet",
-		Description:       "Balanced Claude model via direct Anthropic API",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
-	r.routes["claude-3-haiku-20240307"] = ModelRoute{
-		Provider:          config.ProviderAnthropic,
-		OriginalName:      "claude-3-haiku-20240307",
-		DisplayName:       "Claude 3 Haiku",
-		Description:       "Fast Claude model via direct Anthropic API",
-		MaxTokens:         200000,
-		SupportsStreaming: true,
-	}
+	
+	log.Printf("Loaded model configuration from %s with %d models", configPath, len(r.modelConfig.Models))
+	return nil
 }
+
+// initializeRoutesFromConfig initializes routes from loaded config
+func (r *Router) initializeRoutesFromConfig() {
+	for modelName, modelEntry := range r.modelConfig.Models {
+		// Convert provider string to ProviderType
+		var provider config.ProviderType
+		switch modelEntry.Provider {
+		case "azure-openai":
+			provider = config.ProviderAzureOpenAI
+		case "aws-bedrock":
+			provider = config.ProviderAWSBedrock
+		case "anthropic":
+			provider = config.ProviderAnthropic
+		case "google-ai":
+			provider = config.ProviderGoogleAI
+		default:
+			log.Printf("Warning: Unknown provider '%s' for model '%s', skipping", modelEntry.Provider, modelName)
+			continue
+		}
+		
+		// Use the config key as the route name
+		r.routes[modelName] = ModelRoute{
+			Provider:          provider,
+			ModelName:         modelEntry.ModelName,
+			RouteName:         modelName, // The key from models.yaml
+			DisplayName:       modelEntry.DisplayName,
+			Description:       modelEntry.Description,
+			MaxTokens:         modelEntry.MaxTokens,
+			SupportsStreaming: modelEntry.SupportsStreaming,
+			Enabled:           modelEntry.Enabled,
+			RateLimit:         modelEntry.RateLimit,
+		}
+	}
+	
+	log.Printf("Initialized %d model routes from configuration", len(r.routes))
+}
+
 

@@ -224,12 +224,21 @@ func (s *Server) ChatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalize model name (remove provider prefix)
-	normalizedModel := s.router.NormalizeModelName(req.Model)
+	// Get the actual model name for API calls
+	actualModelName, err := s.router.GetModelName(req.Model)
+	if err != nil {
+		providerErr := s.errorHandler.CreateValidationError(
+			provider,
+			fmt.Sprintf("Failed to get model name: %s", err.Error()),
+			map[string]any{"route": req.Model},
+		)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, req.Stream)
+		return
+	}
 
-	// Create a copy of the request with normalized model name
-	normalizedReq := req
-	normalizedReq.Model = normalizedModel
+	// Create a copy of the request with actual model name for API calls
+	apiReq := req
+	apiReq.Model = actualModelName
 
 	// Get user information from context (if authenticated)
 	var userID string
@@ -249,19 +258,23 @@ func (s *Server) ChatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		ClientIP:  r.RemoteAddr,
 	}
 
-	// Route based on provider with normalized model name
+	// Route based on provider with actual model name
 	var responseErr error
 	switch provider {
 	case config.ProviderAWSBedrock:
-		// Claude adapter needs original model name with prefix for routing
-		responseErr = s.handleProviderRequest(req, w, &metric, s.handleClaude)
+		// Claude adapter uses actual model name for AWS Bedrock
+		responseErr = s.handleProviderRequest(apiReq, w, &metric, func(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics) error {
+			return s.handleClaude(req, w, metric, config.ProviderAWSBedrock)
+		})
 	case config.ProviderAnthropic:
-		// Claude adapter needs original model name with prefix for routing  
-		responseErr = s.handleProviderRequest(req, w, &metric, s.handleClaude)
+		// Claude adapter uses actual model name for direct Anthropic
+		responseErr = s.handleProviderRequest(apiReq, w, &metric, func(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics) error {
+			return s.handleClaude(req, w, metric, config.ProviderAnthropic)
+		})
 	case config.ProviderGoogleAI:
-		responseErr = s.handleProviderRequest(normalizedReq, w, &metric, s.handleGemini)
+		responseErr = s.handleProviderRequest(apiReq, w, &metric, s.handleGemini)
 	case config.ProviderAzureOpenAI:
-		responseErr = s.handleProviderRequest(normalizedReq, w, &metric, s.handleOpenAI)
+		responseErr = s.handleProviderRequest(apiReq, w, &metric, s.handleOpenAI)
 	default:
 		providerErr := s.errorHandler.CreateValidationError(
 			provider,
@@ -337,27 +350,17 @@ func (s *Server) sendErrorResponse(w http.ResponseWriter, err *errors.ProviderEr
 }
 
 // handleClaude processes requests for Anthropic models (both Bedrock and direct)
-func (s *Server) handleClaude(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics) error {
-	log.Printf("Routing to Claude model: %s", req.Model)
-
-	// Detect the actual provider from the model name for proper error handling
-	var provider config.ProviderType
-	if strings.HasPrefix(req.Model, "anthropic/") {
-		provider = config.ProviderAnthropic
-	} else if strings.HasPrefix(req.Model, "aws-bedrock/") {
-		provider = config.ProviderAWSBedrock
-	} else {
-		provider = config.ProviderAWSBedrock // Default fallback
-	}
+func (s *Server) handleClaude(req adapter.ChatRequest, w http.ResponseWriter, metric *database.RequestMetrics, provider config.ProviderType) error {
+	log.Printf("Routing to Claude model: %s via provider: %s", req.Model, provider)
 
 	if req.Stream {
 		return s.handleStreamingRequest(req, w, metric, func() error {
-			return s.claudeAdapter.HandleStreamingRequest(req, w)
+			return s.claudeAdapter.HandleStreamingRequestWithProvider(req, w, string(provider))
 		})
 	}
 
 	// Handle non-streaming
-	openaiResp, err := s.claudeAdapter.HandleRequest(req)
+	openaiResp, err := s.claudeAdapter.HandleRequestWithProvider(req, string(provider))
 	if err != nil {
 		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
 	}
@@ -528,12 +531,12 @@ func (s *Server) ModelsHandler(w http.ResponseWriter, r *http.Request) {
 	for provider, modelRoutes := range models {
 		for _, route := range modelRoutes {
 			openaiModels = append(openaiModels, map[string]any{
-				"id":         route.OriginalName,
+				"id":         route.RouteName,
 				"object":     "model",
 				"created":    time.Now().Unix(),
 				"owned_by":   string(provider),
 				"permission": []any{},
-				"root":       route.OriginalName,
+				"root":       route.RouteName,
 				"parent":     nil,
 				"meta": map[string]any{
 					"display_name":       route.DisplayName,

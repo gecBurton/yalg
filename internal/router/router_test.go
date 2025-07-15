@@ -13,25 +13,26 @@ func TestRouter(t *testing.T) {
 		Providers: map[config.ProviderType]config.ProviderConfig{
 			config.ProviderAzureOpenAI: {Enabled: true},
 			config.ProviderAWSBedrock:  {Enabled: true},
+			config.ProviderAnthropic:   {Enabled: true},
 			config.ProviderGoogleAI:    {Enabled: true},
 		},
 	}
 	router := NewRouter(cfg)
 
 	t.Run("exact model matches are accepted", func(t *testing.T) {
-		// Test exact matches for known models
+		// Test exact matches for known models (from models.yaml)
 		validModels := []struct {
-			prefixedModel string
-			provider      config.ProviderType
+			routeName string
+			provider  config.ProviderType
 		}{
-			{"azure-openai/gpt-4", config.ProviderAzureOpenAI},
-			{"aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0", config.ProviderAWSBedrock},
-			{"google-ai/gemini-1.5-pro", config.ProviderGoogleAI},
+			{"gpt-4o", config.ProviderAzureOpenAI},
+			{"claude-3-sonnet-bedrock", config.ProviderAWSBedrock},
+			{"gemini-1-5-pro", config.ProviderGoogleAI},
 		}
 
 		for _, test := range validModels {
-			t.Run(test.prefixedModel, func(t *testing.T) {
-				err := router.ValidateModel(test.prefixedModel)
+			t.Run(test.routeName, func(t *testing.T) {
+				err := router.ValidateModel(test.routeName)
 				assert.NoError(t, err, "Exact model match should be valid")
 			})
 		}
@@ -40,37 +41,37 @@ func TestRouter(t *testing.T) {
 	t.Run("pattern matches are rejected - no fuzzy matching", func(t *testing.T) {
 		// Test that partial matches are rejected
 		invalidModels := []string{
-			"azure-openai/gpt-5",        // Not in our exact list
-			"azure-openai/gpt",          // Partial match should fail
-			"aws-bedrock/claude",        // Partial match should fail
-			"google-ai/gemini",          // Partial match should fail
-			"azure-openai/davinci-003",  // Pattern match should fail
-			"aws-bedrock/claude-4",      // Non-existent version should fail
-			"google-ai/palm-2",          // Pattern match should fail
+			"gpt-5",                     // Not in our exact list
+			"gpt",                       // Partial match should fail
+			"claude",                    // Partial match should fail
+			"gemini",                    // Partial match should fail
+			"davinci-003",               // Pattern match should fail
+			"claude-4",                  // Non-existent version should fail
+			"palm-2",                    // Pattern match should fail
 		}
 
-		for _, model := range invalidModels {
-			t.Run(model, func(t *testing.T) {
-				err := router.ValidateModel(model)
-				assert.Error(t, err, "Pattern/partial matches should be rejected")
-				assert.Contains(t, err.Error(), "not supported", "Error should indicate model is not supported")
+		for _, route := range invalidModels {
+			t.Run(route, func(t *testing.T) {
+				err := router.ValidateModel(route)
+				assert.Error(t, err, "Non-existent routes should be rejected")
+				assert.Contains(t, err.Error(), "not found", "Error should indicate route is not found")
 			})
 		}
 	})
 
 	t.Run("provider detection works correctly", func(t *testing.T) {
 		tests := []struct {
-			model            string
+			route            string
 			expectedProvider config.ProviderType
 		}{
-			{"azure-openai/gpt-4", config.ProviderAzureOpenAI},
-			{"aws-bedrock/claude-3", config.ProviderAWSBedrock},
-			{"google-ai/gemini-pro", config.ProviderGoogleAI},
+			{"gpt-4o", config.ProviderAzureOpenAI},
+			{"claude-3-sonnet-bedrock", config.ProviderAWSBedrock},
+			{"gemini-1-5-pro", config.ProviderGoogleAI},
 		}
 
 		for _, test := range tests {
-			t.Run(test.model, func(t *testing.T) {
-				provider, err := router.DetectProvider(test.model)
+			t.Run(test.route, func(t *testing.T) {
+				provider, err := router.DetectProvider(test.route)
 				assert.NoError(t, err)
 				assert.Equal(t, test.expectedProvider, provider)
 			})
@@ -79,19 +80,20 @@ func TestRouter(t *testing.T) {
 
 	t.Run("model normalization removes prefixes", func(t *testing.T) {
 		tests := []struct {
-			input    string
+			route    string
 			expected string
 		}{
-			{"azure-openai/gpt-4", "gpt-4"},
-			{"aws-bedrock/claude-3", "claude-3"},
-			{"google-ai/gemini-pro", "gemini-pro"},
-			{"gpt-4", "gpt-4"}, // No prefix
+			{"gpt-4o", "gpt-4o"},
+			{"claude-3-sonnet-bedrock", "anthropic.claude-3-sonnet-20240229-v1:0"},
+			{"gemini-1-5-pro", "gemini-1.5-pro"},
+			{"my-favorite-claude", "claude-3-5-sonnet-20241022"},
 		}
 
 		for _, test := range tests {
-			t.Run(test.input, func(t *testing.T) {
-				normalized := router.NormalizeModelName(test.input)
-				assert.Equal(t, test.expected, normalized)
+			t.Run(test.route, func(t *testing.T) {
+				modelName, err := router.GetModelName(test.route)
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, modelName)
 			})
 		}
 	})
@@ -121,24 +123,24 @@ func TestRouter(t *testing.T) {
 		}
 		disabledRouter := NewRouter(disabledCfg)
 
-		err := disabledRouter.ValidateModel("azure-openai/gpt-4")
+		err := disabledRouter.ValidateModel("gpt-4o")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not enabled or configured")
 	})
 
-	t.Run("models without provider prefix are rejected", func(t *testing.T) {
-		// Models without explicit provider prefix should be rejected
-		modelsWithoutPrefix := []string{
-			"gpt-4",
-			"claude-3-sonnet",
-			"gemini-pro",
+	t.Run("non-existent routes are rejected", func(t *testing.T) {
+		// Non-existent routes should be rejected
+		nonExistentRoutes := []string{
+			"non-existent-model",
+			"fake-route",
+			"invalid-model-name",
 		}
 
-		for _, model := range modelsWithoutPrefix {
-			t.Run(model, func(t *testing.T) {
-				err := router.ValidateModel(model)
+		for _, route := range nonExistentRoutes {
+			t.Run(route, func(t *testing.T) {
+				err := router.ValidateModel(route)
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "requires explicit provider prefix")
+				assert.Contains(t, err.Error(), "not found")
 			})
 		}
 	})
@@ -158,10 +160,12 @@ func TestTableNameConsistency(t *testing.T) {
 		for provider, routes := range models {
 			for _, route := range routes {
 				// Verify all routes have required fields
-				assert.NotEmpty(t, route.OriginalName, "OriginalName should not be empty")
+				assert.NotEmpty(t, route.RouteName, "RouteName should not be empty")
+				assert.NotEmpty(t, route.ModelName, "ModelName should not be empty")
 				assert.NotEmpty(t, route.DisplayName, "DisplayName should not be empty")
 				assert.NotEmpty(t, route.Description, "Description should not be empty")
 				assert.Greater(t, route.MaxTokens, 0, "MaxTokens should be positive")
+				assert.Greater(t, route.RateLimit, 0, "RateLimit should be positive")
 				assert.Equal(t, provider, route.Provider, "Provider should match")
 				
 				// Verify SupportsStreaming is set
@@ -176,6 +180,7 @@ func TestSecurityValidation(t *testing.T) {
 		Providers: map[config.ProviderType]config.ProviderConfig{
 			config.ProviderAzureOpenAI: {Enabled: true},
 			config.ProviderAWSBedrock:  {Enabled: true},
+			config.ProviderAnthropic:   {Enabled: true},
 			config.ProviderGoogleAI:    {Enabled: true},
 		},
 	}
@@ -199,47 +204,46 @@ func TestSecurityValidation(t *testing.T) {
 	})
 
 	t.Run("only whitelisted exact models are accepted", func(t *testing.T) {
-		// Verify that ONLY the exact models we defined are accepted
+		// Verify that ONLY the exact routes we defined in models.yaml are accepted
 		// This test ensures no pattern matching bypasses exist
 		
-		acceptedModels := []string{
-			"azure-openai/gpt-35-turbo",
-			"azure-openai/gpt-4",
-			"azure-openai/gpt-4-turbo", 
-			"azure-openai/gpt-4o",
-			"azure-openai/gpt-4o-mini",
-			"aws-bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-			"aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-			"aws-bedrock/anthropic.claude-3-opus-20240229-v1:0",
-			"aws-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-			"aws-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-			"google-ai/gemini-1.5-pro",
-			"google-ai/gemini-1.5-flash",
-			"google-ai/gemini-2.0-flash-exp",
-			"google-ai/gemini-1.0-pro",
+		acceptedRoutes := []string{
+			"gpt-35-turbo",
+			"gpt-4o",
+			"gpt-4o-mini",
+			"gpt-4o-creative",
+			"claude-3-5-sonnet-bedrock",
+			"claude-3-sonnet-bedrock",
+			"claude-3-haiku-bedrock",
+			"claude-3-5-sonnet",
+			"claude-3-sonnet",
+			"claude-3-haiku",
+			"my-favorite-claude",
+			"gemini-1-5-pro",
+			"gemini-1-5-flash",
 		}
 
-		// Test that all our defined models are accepted
-		for _, model := range acceptedModels {
-			t.Run(model, func(t *testing.T) {
-				err := router.ValidateModel(model)
-				assert.NoError(t, err, "Whitelisted model should be accepted")
+		// Test that all our defined routes are accepted
+		for _, route := range acceptedRoutes {
+			t.Run(route, func(t *testing.T) {
+				err := router.ValidateModel(route)
+				assert.NoError(t, err, "Whitelisted route should be accepted")
 			})
 		}
 
-		// Test that similar but not exact models are rejected
+		// Test that similar but not exact routes are rejected
 		rejectedSimilar := []string{
-			"azure-openai/gpt-4-turbo-preview", // Similar but not exact
-			"aws-bedrock/claude-3-sonnet",      // Missing version suffix
-			"google-ai/gemini-pro",             // Missing version number
-			"azure-openai/GPT-4",               // Wrong case
-			"aws-bedrock/anthropic.claude-3-sonnet-20240229-v1:1", // Wrong version
+			"gpt-4",                    // Route not in config
+			"claude-sonnet",            // Partial route name
+			"gemini-pro",               // Wrong route name
+			"GPT-4O",                   // Wrong case
+			"claude-3-sonnet-v2",       // Similar but different route
 		}
 
-		for _, model := range rejectedSimilar {
-			t.Run("reject_"+model, func(t *testing.T) {
-				err := router.ValidateModel(model)
-				assert.Error(t, err, "Non-exact model should be rejected")
+		for _, route := range rejectedSimilar {
+			t.Run("reject_"+route, func(t *testing.T) {
+				err := router.ValidateModel(route)
+				assert.Error(t, err, "Non-exact route should be rejected")
 			})
 		}
 	})
