@@ -21,11 +21,33 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// ToolCall represents a tool call in OpenAI format
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall represents a function call within a tool call
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolMessage represents a tool response message
+type ToolMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // ChatRequest represents an OpenAI chat completion request
 type ChatRequest struct {
-	Messages []Message `json:"messages"`
-	Model    string    `json:"model"`
-	Stream   bool      `json:"stream"`
+	Messages       []Message                `json:"messages"`
+	Model          string                   `json:"model"`
+	Stream         bool                     `json:"stream"`
+	Tools          []map[string]interface{} `json:"tools,omitempty"`
+	ResponseFormat map[string]interface{}   `json:"response_format,omitempty"`
+	Thinking       map[string]interface{}   `json:"thinking,omitempty"`
 }
 
 // ClaudeAdapter handles Claude models via both direct Anthropic API and AWS Bedrock
@@ -145,13 +167,22 @@ func (a *ClaudeAdapter) ConvertToAnthropicMessages(messages []Message) ([]anthro
 	return anthropicMessages, systemMessage
 }
 
-// ConvertAnthropicToOpenAI converts Anthropic response to OpenAI format
+// ConvertAnthropicToOpenAI converts Anthropic response to OpenAI format with thinking/reasoning support
 func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp *anthropic.Message, model string) map[string]interface{} {
-	// Extract content
+	// Extract content and thinking blocks separately
 	var content string
+	var reasoningContent string
+	var thinkingBlocks []map[string]interface{}
+
 	for _, block := range anthropicResp.Content {
 		if block.Type == "text" {
 			content += block.Text
+		} else if block.Type == "thinking" {
+			reasoningContent = block.Text
+			thinkingBlocks = append(thinkingBlocks, map[string]interface{}{
+				"type":    "thinking",
+				"content": block.Text,
+			})
 		}
 	}
 
@@ -166,6 +197,21 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp *anthropic.Messag
 		finishReason = string(anthropicResp.StopReason)
 	}
 
+	// Build message with thinking support
+	message := map[string]interface{}{
+		"role":    "assistant",
+		"content": content,
+	}
+
+	// Add reasoning fields if thinking content exists
+	if reasoningContent != "" {
+		message["reasoning_content"] = reasoningContent
+	}
+
+	if len(thinkingBlocks) > 0 {
+		message["thinking_blocks"] = thinkingBlocks
+	}
+
 	return map[string]interface{}{
 		"id":      "chatcmpl-" + anthropicResp.ID,
 		"object":  "chat.completion",
@@ -173,11 +219,8 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp *anthropic.Messag
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"message": map[string]string{
-					"role":    "assistant",
-					"content": content,
-				},
+				"index":         0,
+				"message":       message,
 				"finish_reason": finishReason,
 			},
 		},
@@ -215,12 +258,38 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageSt
 		delta["role"] = "assistant"
 
 	case "content_block_start":
-		// Skip content block start events
+		// Handle tool use start events with index conversion
+		if event.Index > 0 {
+			// Convert Anthropic index (1-based) to OpenAI index (0-based)
+			openaiIndex := int(event.Index - 1)
+
+			// Create tool_calls delta for this block
+			delta["tool_calls"] = []interface{}{
+				map[string]interface{}{
+					"index": openaiIndex,
+					"type":  "function",
+				},
+			}
+		}
 
 	case "content_block_delta":
 		// Content chunk - extract text from delta
 		if event.Delta.Text != "" {
-			delta["content"] = event.Delta.Text
+			if event.Index > 0 {
+				// This is a tool call delta
+				openaiIndex := int(event.Index - 1)
+				delta["tool_calls"] = []interface{}{
+					map[string]interface{}{
+						"index": openaiIndex,
+						"function": map[string]interface{}{
+							"arguments": event.Delta.Text,
+						},
+					},
+				}
+			} else {
+				// Regular text content
+				delta["content"] = event.Delta.Text
+			}
 		}
 
 	case "content_block_stop":
@@ -413,4 +482,225 @@ func (a *ClaudeAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 	}
 
 	return a.HandleStreamingRequestWithProvider(req, w, provider)
+}
+
+// ProcessAnthropicHeaders processes Anthropic response headers and converts them to OpenAI-compatible format
+func (a *ClaudeAdapter) ProcessAnthropicHeaders(headers map[string]string) map[string]string {
+	result := make(map[string]string)
+
+	// Map of Anthropic rate limit headers to OpenAI format
+	anthropicToOpenAI := map[string]string{
+		"anthropic-ratelimit-requests-limit":     "x-ratelimit-limit-requests",
+		"anthropic-ratelimit-requests-remaining": "x-ratelimit-remaining-requests",
+		"anthropic-ratelimit-tokens-limit":       "x-ratelimit-limit-tokens",
+		"anthropic-ratelimit-tokens-remaining":   "x-ratelimit-remaining-tokens",
+	}
+
+	// Process all headers
+	for key, value := range headers {
+		// Check if it's an Anthropic rate limit header that needs conversion
+		if openaiKey, exists := anthropicToOpenAI[key]; exists {
+			// Add both OpenAI format and LLM provider format
+			result[openaiKey] = value
+			result["llm_provider-"+key] = value
+		} else {
+			// Add other headers with llm_provider prefix
+			result["llm_provider-"+key] = value
+		}
+	}
+
+	return result
+}
+
+// AnthropicHeaderConfig holds configuration for generating Anthropic headers
+type AnthropicHeaderConfig struct {
+	APIKey           string
+	ComputerToolUsed bool
+	PromptCachingSet bool
+}
+
+// GetAnthropicHeaders generates appropriate headers for Anthropic API requests
+func (a *ClaudeAdapter) GetAnthropicHeaders(config *AnthropicHeaderConfig) map[string]string {
+	headers := make(map[string]string)
+
+	// Always add the API key header
+	if config.APIKey != "" {
+		headers["x-api-key"] = config.APIKey
+	}
+
+	// Add beta headers if special features are used
+	var betaFeatures []string
+
+	if config.ComputerToolUsed {
+		betaFeatures = append(betaFeatures, "computer-use-2024-10-22")
+	}
+
+	if config.PromptCachingSet {
+		betaFeatures = append(betaFeatures, "prompt-caching-2024-07-31")
+	}
+
+	// Add anthropic-beta header if any beta features are used
+	if len(betaFeatures) > 0 {
+		headers["anthropic-beta"] = strings.Join(betaFeatures, ",")
+	}
+
+	return headers
+}
+
+// MapToolHelper transforms OpenAI tool format to Anthropic format with cache control support
+func (a *ClaudeAdapter) MapToolHelper(tool map[string]interface{}) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+
+	// Extract function information
+	function, ok := tool["function"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("tool missing function field")
+	}
+
+	// Set the tool name from function name
+	if name, exists := function["name"]; exists {
+		result["name"] = name
+	}
+
+	// Set the description from function description
+	if description, exists := function["description"]; exists {
+		result["description"] = description
+	}
+
+	// Transform parameters to input_schema
+	if parameters, exists := function["parameters"]; exists {
+		result["input_schema"] = parameters
+	}
+
+	// Handle cache control - check both inside function and outside function
+	var cacheControl map[string]interface{}
+
+	// First check if cache_control is inside the function
+	if functionCacheControl, exists := function["cache_control"]; exists {
+		if cc, ok := functionCacheControl.(map[string]interface{}); ok {
+			cacheControl = cc
+		}
+	}
+
+	// Then check if cache_control is at the tool level (outside function)
+	if toolCacheControl, exists := tool["cache_control"]; exists {
+		if cc, ok := toolCacheControl.(map[string]interface{}); ok {
+			cacheControl = cc
+		}
+	}
+
+	// Add cache control if found
+	if cacheControl != nil {
+		result["cache_control"] = cacheControl
+	}
+
+	return result, nil
+}
+
+// CreateJSONToolCallForResponseFormat creates a tool call for JSON response format
+func (a *ClaudeAdapter) CreateJSONToolCallForResponseFormat(schema map[string]interface{}) map[string]interface{} {
+	tool := map[string]interface{}{
+		"name": "json_tool_call",
+	}
+
+	var inputSchema map[string]interface{}
+
+	if schema != nil {
+		// Use the provided schema
+		inputSchema = schema
+	} else {
+		// Default schema for no constraints
+		inputSchema = map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": true,
+			"properties":           map[string]interface{}{},
+		}
+	}
+
+	tool["input_schema"] = inputSchema
+
+	return tool
+}
+
+// ConvertToolResponseToMessage converts tool call responses to a message format
+func (a *ClaudeAdapter) ConvertToolResponseToMessage(toolCalls []ToolCall) *ToolMessage {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	// Find the json_tool_call
+	for _, toolCall := range toolCalls {
+		if toolCall.Function.Name == "json_tool_call" {
+			if toolCall.Function.Arguments == "" {
+				return nil
+			}
+
+			// Try to parse the arguments as JSON to extract values
+			var args map[string]interface{}
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err == nil {
+				// Check if there's a "values" key
+				if values, exists := args["values"]; exists {
+					if valuesJSON, err := json.Marshal(values); err == nil {
+						return &ToolMessage{
+							Role:    "assistant",
+							Content: string(valuesJSON),
+						}
+					}
+				}
+			}
+
+			// If no values key or JSON parsing failed, return the arguments as-is
+			return &ToolMessage{
+				Role:    "assistant",
+				Content: toolCall.Function.Arguments,
+			}
+		}
+	}
+
+	return nil
+}
+
+// TransformTools transforms a list of tools, preserving computer tools and transforming others
+func (a *ClaudeAdapter) TransformTools(tools []map[string]interface{}) ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+
+	for _, tool := range tools {
+		// Check if it's a computer tool - preserve as-is
+		if toolType, exists := tool["type"]; exists && toolType == "computer_20241022" {
+			result = append(result, tool)
+			continue
+		}
+
+		// For other tools, use MapToolHelper to transform them
+		transformedTool, err := a.MapToolHelper(tool)
+		if err != nil {
+			return nil, fmt.Errorf("failed to transform tool: %w", err)
+		}
+
+		result = append(result, transformedTool)
+	}
+
+	return result, nil
+}
+
+// ConvertAnthropicToOpenAIWithCitations converts Anthropic response to OpenAI format with citations support
+func (a *ClaudeAdapter) ConvertAnthropicToOpenAIWithCitations(anthropicResp *anthropic.Message, model string, citations []map[string]interface{}) map[string]interface{} {
+	// Start with the standard conversion
+	result := a.ConvertAnthropicToOpenAI(anthropicResp, model)
+
+	// Add citations to provider_specific_fields if provided
+	if len(citations) > 0 {
+		choices, ok := result["choices"].([]map[string]interface{})
+		if ok && len(choices) > 0 {
+			message, ok := choices[0]["message"].(map[string]interface{})
+			if ok {
+				// Add provider_specific_fields to existing message
+				message["provider_specific_fields"] = map[string]interface{}{
+					"citations": citations,
+				}
+			}
+		}
+	}
+
+	return result
 }

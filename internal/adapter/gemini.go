@@ -19,7 +19,7 @@ func sanitizeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	
+
 	errStr := err.Error()
 	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
 		errStr = strings.ReplaceAll(errStr, "&key="+apiKey, "&key=***")
@@ -49,7 +49,7 @@ func (a *GeminiAdapter) IsGeminiModel(model string) bool {
 // ConvertToGeminiMessages converts OpenAI messages to Gemini format
 func (a *GeminiAdapter) ConvertToGeminiMessages(messages []Message) ([]*genai.Content, error) {
 	var geminiMessages []*genai.Content
-	
+
 	for _, msg := range messages {
 		var role string
 		switch msg.Role {
@@ -68,13 +68,13 @@ func (a *GeminiAdapter) ConvertToGeminiMessages(messages []Message) ([]*genai.Co
 		default:
 			role = "user"
 		}
-		
+
 		geminiMessages = append(geminiMessages, &genai.Content{
 			Parts: []genai.Part{genai.Text(msg.Content)},
 			Role:  role,
 		})
 	}
-	
+
 	// Handle system message by prepending to first user message
 	for i, msg := range messages {
 		if msg.Role == "system" && len(geminiMessages) > 0 {
@@ -95,7 +95,7 @@ func (a *GeminiAdapter) ConvertToGeminiMessages(messages []Message) ([]*genai.Co
 			break
 		}
 	}
-	
+
 	return geminiMessages, nil
 }
 
@@ -174,8 +174,8 @@ func (a *GeminiAdapter) ConvertGeminiStreamToOpenAI(resp *genai.GenerateContentR
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"delta": map[string]interface{}{},
+				"index":         0,
+				"delta":         map[string]interface{}{},
 				"finish_reason": nil,
 			},
 		},
@@ -216,16 +216,16 @@ func (a *GeminiAdapter) ConvertGeminiStreamToOpenAI(resp *genai.GenerateContentR
 func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, error) {
 	log.Printf("Processing non-streaming request for Gemini model: %s", req.Model)
 	log.Printf("Request messages: %+v", req.Messages)
-	
+
 	// Get the model - ensure we're using the correct model name format
 	modelName := req.Model
 	if !strings.HasPrefix(modelName, "models/") {
 		modelName = "models/" + modelName
 	}
 	log.Printf("Using Gemini model ID: %s", modelName)
-	
+
 	model := a.client.GenerativeModel(modelName)
-	
+
 	// Configure model settings
 	model.GenerationConfig = genai.GenerationConfig{
 		Temperature:     genai.Ptr(float32(0.7)),
@@ -233,7 +233,7 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 		TopP:            genai.Ptr(float32(0.9)),
 		MaxOutputTokens: genai.Ptr(int32(2048)),
 	}
-	
+
 	// Configure safety settings to be more permissive
 	model.SafetySettings = []*genai.SafetySetting{
 		{
@@ -253,24 +253,24 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 			Threshold: genai.HarmBlockMediumAndAbove,
 		},
 	}
-	
+
 	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
-	
+
 	// Convert messages
 	geminiMessages, err := a.ConvertToGeminiMessages(req.Messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert messages: %v", err)
 	}
-	
+
 	log.Printf("Converted to %d Gemini messages", len(geminiMessages))
-	
+
 	// Handle case where we have no messages
 	if len(geminiMessages) == 0 {
 		return nil, fmt.Errorf("no valid messages to process")
 	}
-	
+
 	var resp *genai.GenerateContentResponse
-	
+
 	if len(geminiMessages) == 1 {
 		// Single message, use direct generation instead of chat
 		var prompt string
@@ -279,11 +279,11 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 				prompt = string(text)
 			}
 		}
-		
+
 		if prompt == "" {
 			return nil, fmt.Errorf("empty prompt for single message request")
 		}
-		
+
 		log.Printf("Using direct generation for single message")
 		log.Printf("Prompt length: %d characters", len(prompt))
 		resp, err = model.GenerateContent(context.Background(), genai.Text(prompt))
@@ -291,7 +291,7 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 		// Multiple messages, use chat session
 		cs := model.StartChat()
 		cs.History = geminiMessages[:len(geminiMessages)-1] // All but last message as history
-		
+
 		// Get the last message content
 		var prompt string
 		if len(geminiMessages) > 0 {
@@ -302,16 +302,16 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 				}
 			}
 		}
-		
+
 		if prompt == "" {
 			return nil, fmt.Errorf("empty prompt for chat session request")
 		}
-		
+
 		log.Printf("Using chat session")
 		log.Printf("Prompt length: %d characters", len(prompt))
 		resp, err = cs.SendMessage(context.Background(), genai.Text(prompt))
 	}
-	
+
 	if err != nil {
 		log.Printf("Gemini error for model %s: %s", req.Model, sanitizeError(err))
 		if gerr, ok := err.(*googleapi.Error); ok {
@@ -319,7 +319,7 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 		}
 		return nil, fmt.Errorf("gemini API error: %s", sanitizeError(err))
 	}
-	
+
 	// Convert to OpenAI format
 	return a.ConvertGeminiToOpenAI(resp, req.Model), nil
 }
@@ -328,16 +328,16 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseWriter) error {
 	log.Printf("Processing streaming request for Gemini model: %s", req.Model)
 	log.Printf("Request messages: %+v", req.Messages)
-	
+
 	// Get the model - ensure we're using the correct model name format
 	modelName := req.Model
 	if !strings.HasPrefix(modelName, "models/") {
 		modelName = "models/" + modelName
 	}
 	log.Printf("Using Gemini model ID: %s", modelName)
-	
+
 	model := a.client.GenerativeModel(modelName)
-	
+
 	// Configure model settings
 	model.GenerationConfig = genai.GenerationConfig{
 		Temperature:     genai.Ptr(float32(0.7)),
@@ -345,7 +345,7 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 		TopP:            genai.Ptr(float32(0.9)),
 		MaxOutputTokens: genai.Ptr(int32(2048)),
 	}
-	
+
 	// Configure safety settings to be more permissive
 	model.SafetySettings = []*genai.SafetySetting{
 		{
@@ -365,22 +365,22 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 			Threshold: genai.HarmBlockMediumAndAbove,
 		},
 	}
-	
+
 	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
-	
+
 	// Convert messages
 	geminiMessages, err := a.ConvertToGeminiMessages(req.Messages)
 	if err != nil {
 		return fmt.Errorf("failed to convert messages: %v", err)
 	}
-	
+
 	log.Printf("Converted to %d Gemini messages", len(geminiMessages))
-	
+
 	// Handle case where we have no messages or only one message
 	if len(geminiMessages) == 0 {
 		return fmt.Errorf("no valid messages to process")
 	}
-	
+
 	if len(geminiMessages) == 1 {
 		// Single message, use direct generation instead of chat
 		var prompt string
@@ -389,23 +389,23 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 				prompt = string(text)
 			}
 		}
-		
+
 		if prompt == "" {
 			return fmt.Errorf("empty prompt for single message request")
 		}
-		
+
 		log.Printf("Using direct generation for single message: %s", prompt)
 		log.Printf("Prompt length: %d characters", len(prompt))
-		
+
 		// Try a more explicit approach with Content structure
 		content := &genai.Content{
 			Parts: []genai.Part{genai.Text(prompt)},
 			Role:  "user",
 		}
-		
+
 		log.Printf("Creating stream with content: %+v", content)
 		iter := model.GenerateContentStream(context.Background(), content.Parts...)
-		
+
 		isFirst := true
 		for {
 			resp, err := iter.Next()
@@ -414,24 +414,24 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 			}
 			if err != nil {
 				log.Printf("Gemini streaming error for model %s: %s", req.Model, sanitizeError(err))
-				
+
 				if gerr, ok := err.(*googleapi.Error); ok {
 					log.Printf("Google API Error - Code: %d, Message: '%s'", gerr.Code, gerr.Message)
 				}
-				
+
 				// Already logged with sanitizeError above
-				
+
 				return fmt.Errorf("gemini API error: %s", sanitizeError(err))
 			}
-			
+
 			// Convert to OpenAI format
 			openaiChunk := a.ConvertGeminiStreamToOpenAI(resp, req.Model, isFirst)
 			isFirst = false
-			
+
 			// Send as SSE
 			data, _ := json.Marshal(openaiChunk)
 			w.Write([]byte("data: " + string(data) + "\n\n"))
-			
+
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
@@ -440,7 +440,7 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 		// Multiple messages, use chat session
 		cs := model.StartChat()
 		cs.History = geminiMessages[:len(geminiMessages)-1] // All but last message as history
-		
+
 		// Get the last message content
 		var prompt string
 		if len(geminiMessages) > 0 {
@@ -451,15 +451,15 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 				}
 			}
 		}
-		
+
 		if prompt == "" {
 			return fmt.Errorf("empty prompt for chat session request")
 		}
-		
+
 		log.Printf("Using chat session with prompt: %s", prompt)
 		log.Printf("Prompt length: %d characters", len(prompt))
 		iter := cs.SendMessageStream(context.Background(), genai.Text(prompt))
-		
+
 		isFirst := true
 		for {
 			resp, err := iter.Next()
@@ -470,23 +470,23 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 				log.Printf("Gemini streaming error for model %s: %s", req.Model, sanitizeError(err))
 				return fmt.Errorf("gemini API error: %s", sanitizeError(err))
 			}
-			
+
 			// Convert to OpenAI format
 			openaiChunk := a.ConvertGeminiStreamToOpenAI(resp, req.Model, isFirst)
 			isFirst = false
-			
+
 			// Send as SSE
 			data, _ := json.Marshal(openaiChunk)
 			w.Write([]byte("data: " + string(data) + "\n\n"))
-			
+
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
 		}
 	}
-	
+
 	// Send completion marker
 	w.Write([]byte("data: [DONE]\n\n"))
-	
+
 	return nil
 }

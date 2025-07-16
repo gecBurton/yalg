@@ -639,29 +639,38 @@ func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 // estimateTokenUsage provides a rough estimate of token usage based on word count
 // This is used for streaming requests where exact token counts aren't available
+// Based on tiktoken approximations used in LiteLLM
 func (s *Server) estimateTokenUsage(messages []adapter.Message) int {
-	totalWords := 0
+	totalTokens := 0
+	
 	for _, msg := range messages {
-		// Count words by splitting on whitespace
-		words := len(strings.Fields(msg.Content))
-		totalWords += words
+		// Count characters and words
+		charCount := len(msg.Content)
+		wordCount := len(strings.Fields(msg.Content))
+		
+		// Base token estimation using character count (more accurate than word count)
+		// GPT models use ~4 characters per token on average for English text
+		tokenEstimate := charCount / 4
+		
+		// Alternative estimation using word count (~1.3 tokens per word)
+		wordTokenEstimate := (wordCount * 13) / 10
+		
+		// Use the higher of the two estimates for better accuracy
+		msgTokens := tokenEstimate
+		if wordTokenEstimate > tokenEstimate {
+			msgTokens = wordTokenEstimate
+		}
+		
+		// Add overhead for message structure (3-4 tokens per message)
+		msgTokens += 3
+		
+		totalTokens += msgTokens
 	}
-
-	// More accurate estimate: ~1.3 tokens per word for English text
-	// This accounts for subword tokenization (BPE) used by modern LLMs
-	promptTokens := (totalWords * 13) / 10
-
-	// Minimum of 10 tokens for very short messages
-	if promptTokens < 10 {
-		promptTokens = 10
+	
+	// Minimum of 1 token for empty input
+	if totalTokens < 1 {
+		totalTokens = 1
 	}
-
-	// For streaming, estimate response tokens based on prompt length
-	// Most LLM responses are 50-150% of prompt length, use 80% as default
-	responseTokens := (promptTokens * 8) / 10
-	if responseTokens < 15 {
-		responseTokens = 15 // Minimum response
-	}
-
-	return promptTokens + responseTokens
+	
+	return totalTokens
 }
