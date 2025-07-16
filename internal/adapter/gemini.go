@@ -2,12 +2,16 @@ package adapter
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/googleapi"
@@ -46,65 +50,290 @@ func (a *GeminiAdapter) IsGeminiModel(model string) bool {
 		strings.HasPrefix(model, "models/gemini")
 }
 
-// ConvertToGeminiMessages converts OpenAI messages to Gemini format
-func (a *GeminiAdapter) ConvertToGeminiMessages(messages []Message) ([]*genai.Content, error) {
-	var geminiMessages []*genai.Content
+// convertContentToGeminiParts converts OpenAI content to Gemini parts
+func (a *GeminiAdapter) convertContentToGeminiParts(content interface{}) ([]genai.Part, error) {
+	switch c := content.(type) {
+	case string:
+		return []genai.Part{genai.Text(c)}, nil
+	case []ContentPart:
+		var parts []genai.Part
+		for _, part := range c {
+			switch part.Type {
+			case "text":
+				parts = append(parts, genai.Text(part.Text))
+			case "image_url":
+				if part.ImageURL != nil {
+					// Handle base64 encoded images
+					if strings.HasPrefix(part.ImageURL.URL, "data:") {
+						// Parse data URL
+						parts = append(parts, a.convertDataURLToGeminiPart(part.ImageURL.URL))
+					} else {
+						// Handle regular URLs - in real implementation you'd fetch and convert
+						parts = append(parts, genai.Text(fmt.Sprintf("Image URL: %s", part.ImageURL.URL)))
+					}
+				}
+			}
+		}
+		return parts, nil
+	default:
+		return []genai.Part{genai.Text(fmt.Sprintf("%v", content))}, nil
+	}
+}
 
+// convertDataURLToGeminiPart converts a data URL to a Gemini part
+func (a *GeminiAdapter) convertDataURLToGeminiPart(dataURL string) genai.Part {
+	// Parse data URL format: data:image/jpeg;base64,{base64data}
+	re := regexp.MustCompile(`^data:([^;]+);base64,(.+)$`)
+	matches := re.FindStringSubmatch(dataURL)
+	
+	if len(matches) == 3 {
+		mimeType := matches[1]
+		base64Data := matches[2]
+		
+		// Decode base64
+		data, err := base64.StdEncoding.DecodeString(base64Data)
+		if err != nil {
+			return genai.Text("Error decoding image data")
+		}
+		
+		// Create image part
+		return genai.ImageData(mimeType, data)
+	}
+	
+	return genai.Text("Invalid image data")
+}
+
+// ConvertToGeminiMessages converts OpenAI messages to Gemini format with multi-modal support
+func (a *GeminiAdapter) ConvertToGeminiMessages(messages []Message) ([]*genai.Content, error) {
+	return a.ConvertToGeminiMessagesWithURLContext(messages, false)
+}
+
+// ConvertToGeminiMessagesWithURLContext converts OpenAI messages to Gemini format with URL context processing
+func (a *GeminiAdapter) ConvertToGeminiMessagesWithURLContext(messages []Message, enableURLContext bool) ([]*genai.Content, error) {
+	var geminiMessages []*genai.Content
+	var systemMessages []string
+
+	// First pass: collect system messages
 	for _, msg := range messages {
+		if msg.Role == "system" {
+			contentStr := getContentAsString(msg.Content)
+			if enableURLContext {
+				// Use Claude adapter's URL processing (shared function)
+				claudeAdapter := &ClaudeAdapter{}
+				contentStr = claudeAdapter.processContentWithURLContext(contentStr)
+			}
+			systemMessages = append(systemMessages, contentStr)
+		}
+	}
+
+	// Second pass: convert non-system messages
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			continue // Skip system messages, they're handled separately
+		}
+
 		var role string
 		switch msg.Role {
 		case "user":
 			role = "user"
 		case "assistant":
 			role = "model"
-		case "system":
-			// Gemini doesn't have a system role, prepend to first user message
-			if len(geminiMessages) == 0 {
-				// If this is the first message and it's system, we'll handle it specially
-				continue
-			}
-			// Skip system messages that aren't first
-			continue
+		case "tool":
+			role = "user" // Tool responses are treated as user messages
 		default:
 			role = "user"
 		}
 
+		// Process URL context for user messages if enabled
+		if enableURLContext && msg.Role == "user" {
+			claudeAdapter := &ClaudeAdapter{}
+			msg = claudeAdapter.processMessageURLContext(msg)
+		}
+
+		parts, err := a.convertContentToGeminiParts(msg.Content)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add tool call information if present
+		if len(msg.ToolCalls) > 0 {
+			for _, toolCall := range msg.ToolCalls {
+				toolText := fmt.Sprintf("Tool Call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
+				parts = append(parts, genai.Text(toolText))
+			}
+		}
+
 		geminiMessages = append(geminiMessages, &genai.Content{
-			Parts: []genai.Part{genai.Text(msg.Content)},
+			Parts: parts,
 			Role:  role,
 		})
 	}
 
-	// Handle system message by prepending to first user message
-	for i, msg := range messages {
-		if msg.Role == "system" && len(geminiMessages) > 0 {
-			// Find first user message and prepend system content
-			for j := i + 1; j < len(messages); j++ {
-				if messages[j].Role == "user" {
-					systemPrompt := fmt.Sprintf("System: %s\n\nUser: %s", msg.Content, messages[j].Content)
-					// Update the corresponding gemini message
-					for k, gMsg := range geminiMessages {
-						if gMsg.Role == "user" {
-							geminiMessages[k].Parts = []genai.Part{genai.Text(systemPrompt)}
-							break
-						}
+	// Prepend system messages to first user message
+	if len(systemMessages) > 0 && len(geminiMessages) > 0 {
+		for i, msg := range geminiMessages {
+			if msg.Role == "user" {
+				systemPrompt := strings.Join(systemMessages, "\n\n")
+				
+				// Get the user content
+				var userContent string
+				if len(msg.Parts) > 0 {
+					if text, ok := msg.Parts[0].(genai.Text); ok {
+						userContent = string(text)
 					}
-					break
 				}
+				
+				// Create single combined part
+				combinedContent := fmt.Sprintf("System: %s\n\n%s", systemPrompt, userContent)
+				geminiMessages[i].Parts = []genai.Part{genai.Text(combinedContent)}
+				break
 			}
-			break
 		}
 	}
 
 	return geminiMessages, nil
 }
 
-// ConvertGeminiToOpenAI converts Gemini response to OpenAI format
+// convertOpenAIToolsToGemini converts OpenAI tools to Gemini function declarations
+func (a *GeminiAdapter) convertOpenAIToolsToGemini(tools []Tool) []*genai.Tool {
+	var geminiTools []*genai.Tool
+	
+	for _, tool := range tools {
+		if tool.Type == "function" {
+			// Convert OpenAI parameters to Gemini schema
+			geminiSchema := &genai.Schema{
+				Type: genai.TypeObject,
+			}
+			
+			// Convert parameters if they exist
+			if tool.Function.Parameters != nil {
+				if properties, ok := tool.Function.Parameters["properties"].(map[string]interface{}); ok {
+					geminiSchema.Properties = make(map[string]*genai.Schema)
+					for propName, propSchema := range properties {
+						if propMap, ok := propSchema.(map[string]interface{}); ok {
+							geminiProp := &genai.Schema{}
+							if propType, ok := propMap["type"].(string); ok {
+								switch propType {
+								case "string":
+									geminiProp.Type = genai.TypeString
+								case "integer":
+									geminiProp.Type = genai.TypeInteger
+								case "number":
+									geminiProp.Type = genai.TypeNumber
+								case "boolean":
+									geminiProp.Type = genai.TypeBoolean
+								case "array":
+									geminiProp.Type = genai.TypeArray
+								case "object":
+									geminiProp.Type = genai.TypeObject
+								}
+							}
+							if description, ok := propMap["description"].(string); ok {
+								geminiProp.Description = description
+							}
+							geminiSchema.Properties[propName] = geminiProp
+						}
+					}
+				}
+				
+				// Handle required fields
+				if required, ok := tool.Function.Parameters["required"].([]interface{}); ok {
+					geminiSchema.Required = make([]string, len(required))
+					for i, req := range required {
+						if reqStr, ok := req.(string); ok {
+							geminiSchema.Required[i] = reqStr
+						}
+					}
+				} else if required, ok := tool.Function.Parameters["required"].([]string); ok {
+					geminiSchema.Required = required
+				}
+			}
+			
+			// Create function declaration
+			funcDecl := &genai.FunctionDeclaration{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  geminiSchema,
+			}
+			
+			// Create tool
+			geminiTool := &genai.Tool{
+				FunctionDeclarations: []*genai.FunctionDeclaration{funcDecl},
+			}
+			
+			geminiTools = append(geminiTools, geminiTool)
+		}
+	}
+	
+	return geminiTools
+}
+
+// generateToolCallID generates a unique ID for a tool call
+func generateToolCallID() string {
+	return "call_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// parseToolCalls extracts tool calls from Gemini response parts
+func (a *GeminiAdapter) parseToolCalls(parts []genai.Part) []ToolCall {
+	var toolCalls []ToolCall
+	
+	for _, part := range parts {
+		if fc, ok := part.(genai.FunctionCall); ok {
+			// Convert function call arguments to JSON string
+			argsJSON, err := json.Marshal(fc.Args)
+			if err != nil {
+				argsJSON = []byte("{}")
+			}
+			
+			toolCall := ToolCall{
+				ID:   generateToolCallID(),
+				Type: "function",
+				Function: FunctionCall{
+					Name:      fc.Name,
+					Arguments: string(argsJSON),
+				},
+			}
+			toolCalls = append(toolCalls, toolCall)
+		}
+	}
+	
+	return toolCalls
+}
+
+// ConvertGeminiToOpenAI converts Gemini response to OpenAI format with tool call support
 func (a *GeminiAdapter) ConvertGeminiToOpenAI(geminiResp *genai.GenerateContentResponse, model string) map[string]interface{} {
-	content := ""
-	if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
-		if text, ok := geminiResp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			content = string(text)
+	var content string
+	var toolCalls []ToolCall
+	finishReason := "stop"
+	
+	if len(geminiResp.Candidates) > 0 {
+		candidate := geminiResp.Candidates[0]
+		
+		// Extract content and tool calls from parts
+		var textParts []string
+		for _, part := range candidate.Content.Parts {
+			if text, ok := part.(genai.Text); ok {
+				textParts = append(textParts, string(text))
+			}
+		}
+		content = strings.Join(textParts, "")
+		
+		// Extract tool calls
+		toolCalls = a.parseToolCalls(candidate.Content.Parts)
+		
+		// Set finish reason based on tool calls
+		if len(toolCalls) > 0 {
+			finishReason = "tool_calls"
+		}
+		
+		// Handle other finish reasons
+		switch candidate.FinishReason {
+		case genai.FinishReasonSafety:
+			finishReason = "content_filter"
+		case genai.FinishReasonMaxTokens:
+			finishReason = "stop" // LiteLLM expects "stop" for max tokens
+		case genai.FinishReasonRecitation:
+			finishReason = "stop" // For non-streaming, use "stop" as fallback
 		}
 	}
 
@@ -116,19 +345,34 @@ func (a *GeminiAdapter) ConvertGeminiToOpenAI(geminiResp *genai.GenerateContentR
 		totalTokens = int(geminiResp.UsageMetadata.TotalTokenCount)
 	}
 
+	// Build message - use different format depending on whether there are tool calls
+	var message interface{}
+	
+	if len(toolCalls) > 0 {
+		// Complex message with tool calls
+		message = map[string]interface{}{
+			"role":       "assistant",
+			"content":    nil, // Content is nil when there are tool calls
+			"tool_calls": toolCalls,
+		}
+	} else {
+		// Simple message format for backward compatibility
+		message = map[string]string{
+			"role":    "assistant",
+			"content": content,
+		}
+	}
+
 	return map[string]interface{}{
 		"id":      "chatcmpl-" + strings.ReplaceAll(strings.ToLower(model), "/", "-"),
 		"object":  "chat.completion",
-		"created": 1699999999,
+		"created": time.Now().Unix(),
 		"model":   model,
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"message": map[string]string{
-					"role":    "assistant",
-					"content": content,
-				},
-				"finish_reason": "stop",
+				"index":         0,
+				"message":       message,
+				"finish_reason": finishReason,
 			},
 		},
 		"usage": map[string]interface{}{
@@ -189,23 +433,49 @@ func (a *GeminiAdapter) ConvertGeminiStreamToOpenAI(resp *genai.GenerateContentR
 		delta["role"] = "assistant"
 	}
 
-	// Extract content from Gemini response
+	// Extract content and tool calls from Gemini response
 	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		if text, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			content := string(text)
-			if content != "" {
-				delta["content"] = content
+		candidate := resp.Candidates[0]
+		
+		// Handle text content
+		var textContent string
+		for _, part := range candidate.Content.Parts {
+			if text, ok := part.(genai.Text); ok {
+				textContent += string(text)
 			}
+		}
+		
+		if textContent != "" {
+			delta["content"] = textContent
+		}
+		
+		// Handle tool calls
+		toolCalls := a.parseToolCalls(candidate.Content.Parts)
+		if len(toolCalls) > 0 {
+			delta["tool_calls"] = toolCalls
+			delta["content"] = nil // Content is nil when there are tool calls
 		}
 	}
 
 	// Check for finish reason
 	if len(resp.Candidates) > 0 {
-		switch resp.Candidates[0].FinishReason {
-		case genai.FinishReasonStop, genai.FinishReasonMaxTokens:
-			choice["finish_reason"] = "stop"
-		case genai.FinishReasonSafety:
-			choice["finish_reason"] = "content_filter"
+		candidate := resp.Candidates[0]
+		
+		// Check if there are tool calls to set appropriate finish reason
+		if len(a.parseToolCalls(candidate.Content.Parts)) > 0 {
+			choice["finish_reason"] = "tool_calls"
+		} else {
+			switch candidate.FinishReason {
+			case genai.FinishReasonStop:
+				choice["finish_reason"] = "stop"
+			case genai.FinishReasonMaxTokens:
+				choice["finish_reason"] = "stop" // LiteLLM expects "stop" for max tokens
+			case genai.FinishReasonSafety:
+				choice["finish_reason"] = "content_filter"
+			case genai.FinishReasonRecitation:
+				// LiteLLM expects nil for recitation
+				choice["finish_reason"] = nil
+			}
 		}
 	}
 
@@ -254,10 +524,23 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 		},
 	}
 
+	// Configure tools if provided
+	if len(req.Tools) > 0 {
+		geminiTools := a.convertOpenAIToolsToGemini(req.Tools)
+		model.Tools = geminiTools
+		log.Printf("Configured %d tools for Gemini model", len(geminiTools))
+	}
+
 	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
 
+	// Check if URL context processing is enabled
+	enableURLContext := req.URLContext != nil
+	if enableURLContext {
+		log.Printf("URL context processing enabled for Gemini request")
+	}
+	
 	// Convert messages
-	geminiMessages, err := a.ConvertToGeminiMessages(req.Messages)
+	geminiMessages, err := a.ConvertToGeminiMessagesWithURLContext(req.Messages, enableURLContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert messages: %v", err)
 	}
@@ -346,6 +629,13 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 		MaxOutputTokens: genai.Ptr(int32(2048)),
 	}
 
+	// Configure tools if provided
+	if len(req.Tools) > 0 {
+		geminiTools := a.convertOpenAIToolsToGemini(req.Tools)
+		model.Tools = geminiTools
+		log.Printf("Configured %d tools for streaming Gemini model", len(geminiTools))
+	}
+
 	// Configure safety settings to be more permissive
 	model.SafetySettings = []*genai.SafetySetting{
 		{
@@ -368,8 +658,14 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 
 	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
 
+	// Check if URL context processing is enabled
+	enableURLContext := req.URLContext != nil
+	if enableURLContext {
+		log.Printf("URL context processing enabled for Gemini streaming request")
+	}
+	
 	// Convert messages
-	geminiMessages, err := a.ConvertToGeminiMessages(req.Messages)
+	geminiMessages, err := a.ConvertToGeminiMessagesWithURLContext(req.Messages, enableURLContext)
 	if err != nil {
 		return fmt.Errorf("failed to convert messages: %v", err)
 	}

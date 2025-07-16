@@ -1509,3 +1509,362 @@ func TestClaudeAdapter_CitationsAPI(t *testing.T) {
 func compareJSON(a, b interface{}) bool {
 	return reflect.DeepEqual(a, b)
 }
+
+// TestClaudeAdapter_ThinkingModeWithBudget tests thinking mode with budget token tracking
+func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+
+	// Mock Anthropic response with thinking blocks
+	anthropicResp := &anthropic.Message{
+		ID:         "msg_test_thinking",
+		Role:       "assistant",
+		StopReason: "end_turn",
+		Content: []anthropic.ContentBlockUnion{
+			{
+				Type: "thinking",
+				Text: "Let me think about this step by step. First, I need to understand what the user is asking for. They want to know about the weather in Paris.",
+			},
+			{
+				Type: "text",
+				Text: "The current weather in Paris is sunny with a temperature of 22°C.",
+			},
+		},
+		Usage: anthropic.Usage{
+			InputTokens:  150,
+			OutputTokens: 200,
+		},
+	}
+
+	tests := []struct {
+		name        string
+		budgetInfo  map[string]interface{}
+		expectBudget bool
+		expectRemaining int
+	}{
+		{
+			name: "no budget specified",
+			budgetInfo: nil,
+			expectBudget: false,
+		},
+		{
+			name: "budget specified with adequate tokens",
+			budgetInfo: map[string]interface{}{
+				"budget_tokens": 500,
+			},
+			expectBudget: true,
+			expectRemaining: 150, // 500 - 350 (150 input + 200 output)
+		},
+		{
+			name: "budget specified with insufficient tokens",
+			budgetInfo: map[string]interface{}{
+				"budget_tokens": 300,
+			},
+			expectBudget: true,
+			expectRemaining: 0, // Budget exhausted
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := adapter.ConvertAnthropicToOpenAIWithBudget(anthropicResp, "claude-3-5-sonnet-20241022", tt.budgetInfo)
+
+			// Check basic structure
+			if result["object"] != "chat.completion" {
+				t.Errorf("Expected object to be 'chat.completion', got %v", result["object"])
+			}
+
+			// Check choices
+			choices, ok := result["choices"].([]map[string]interface{})
+			if !ok || len(choices) == 0 {
+				t.Fatalf("Expected choices array")
+			}
+
+			message, ok := choices[0]["message"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("Expected message object")
+			}
+
+			// Check that thinking content is properly separated
+			if reasoningContent, exists := message["reasoning_content"]; exists {
+				expected := "Let me think about this step by step. First, I need to understand what the user is asking for. They want to know about the weather in Paris."
+				if reasoningContent != expected {
+					t.Errorf("Expected reasoning content to match thinking block")
+				}
+			} else {
+				t.Error("Expected reasoning_content in message")
+			}
+
+			// Check that thinking blocks are present
+			if thinkingBlocks, exists := message["thinking_blocks"]; exists {
+				blocks := thinkingBlocks.([]map[string]interface{})
+				if len(blocks) != 1 {
+					t.Errorf("Expected 1 thinking block, got %d", len(blocks))
+				}
+				
+				if blocks[0]["type"] != "thinking" {
+					t.Errorf("Expected thinking block type to be 'thinking', got %v", blocks[0]["type"])
+				}
+			} else {
+				t.Error("Expected thinking_blocks in message")
+			}
+
+			// Check usage information
+			usage, ok := result["usage"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("Expected usage object")
+			}
+
+			// Check basic token counts
+			if usage["prompt_tokens"] != 150 {
+				t.Errorf("Expected prompt_tokens 150, got %v", usage["prompt_tokens"])
+			}
+			if usage["completion_tokens"] != 200 {
+				t.Errorf("Expected completion_tokens 200, got %v", usage["completion_tokens"])
+			}
+			if usage["total_tokens"] != 350 {
+				t.Errorf("Expected total_tokens 350, got %v", usage["total_tokens"])
+			}
+
+			// Check thinking tokens
+			if thinkingTokens, exists := usage["thinking_tokens"]; exists {
+				// Should be > 0 since we have thinking content
+				if tokens, ok := thinkingTokens.(int); !ok || tokens <= 0 {
+					t.Errorf("Expected thinking_tokens > 0, got %v", thinkingTokens)
+				}
+			} else {
+				t.Error("Expected thinking_tokens in usage")
+			}
+
+			// Check budget information
+			if tt.expectBudget {
+				if budgetTokens, exists := usage["budget_tokens"]; exists {
+					if budgetTokens != tt.budgetInfo["budget_tokens"] {
+						t.Errorf("Expected budget_tokens %v, got %v", tt.budgetInfo["budget_tokens"], budgetTokens)
+					}
+				} else {
+					t.Error("Expected budget_tokens in usage")
+				}
+
+				if budgetRemaining, exists := usage["budget_remaining"]; exists {
+					if budgetRemaining != tt.expectRemaining {
+						t.Errorf("Expected budget_remaining %d, got %v", tt.expectRemaining, budgetRemaining)
+					}
+				} else {
+					t.Error("Expected budget_remaining in usage")
+				}
+			} else {
+				// Should not have budget information
+				if _, exists := usage["budget_tokens"]; exists {
+					t.Error("Did not expect budget_tokens in usage")
+				}
+				if _, exists := usage["budget_remaining"]; exists {
+					t.Error("Did not expect budget_remaining in usage")
+				}
+			}
+		})
+	}
+}
+
+// TestClaudeAdapter_URLContextProcessing tests URL context processing functionality
+func TestClaudeAdapter_URLContextProcessing(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+
+	tests := []struct {
+		name           string
+		messages       []Message
+		enableURL      bool
+		expectedURLs   []string
+		shouldProcess  bool
+	}{
+		{
+			name: "URL context disabled",
+			messages: []Message{
+				{Role: "user", Content: "Please summarize https://example.com"},
+			},
+			enableURL:     false,
+			expectedURLs:  []string{"https://example.com"},
+			shouldProcess: false,
+		},
+		{
+			name: "URL context enabled with single URL",
+			messages: []Message{
+				{Role: "user", Content: "Please summarize https://example.com"},
+			},
+			enableURL:     true,
+			expectedURLs:  []string{"https://example.com"},
+			shouldProcess: true,
+		},
+		{
+			name: "URL context enabled with multiple URLs",
+			messages: []Message{
+				{Role: "user", Content: "Compare https://example.com and https://test.com"},
+			},
+			enableURL:     true,
+			expectedURLs:  []string{"https://example.com", "https://test.com"},
+			shouldProcess: true,
+		},
+		{
+			name: "No URLs in content",
+			messages: []Message{
+				{Role: "user", Content: "What is the weather today?"},
+			},
+			enableURL:     true,
+			expectedURLs:  []string{},
+			shouldProcess: false,
+		},
+		{
+			name: "Structured content with URLs",
+			messages: []Message{
+				{
+					Role: "user",
+					Content: []ContentPart{
+						{Type: "text", Text: "Please analyze this document: https://example.com"},
+					},
+				},
+			},
+			enableURL:     true,
+			expectedURLs:  []string{"https://example.com"},
+			shouldProcess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test URL extraction
+			for _, msg := range tt.messages {
+				content := getContentAsString(msg.Content)
+				urls := extractURLsFromContent(content)
+				
+				if len(urls) != len(tt.expectedURLs) {
+					t.Errorf("Expected %d URLs, got %d", len(tt.expectedURLs), len(urls))
+				}
+				
+				for i, expectedURL := range tt.expectedURLs {
+					if i < len(urls) && urls[i] != expectedURL {
+						t.Errorf("Expected URL %s, got %s", expectedURL, urls[i])
+					}
+				}
+			}
+
+			// Test message conversion with URL context
+			anthropicMessages, systemMessage := adapter.ConvertToAnthropicMessagesWithURLContext(tt.messages, tt.enableURL)
+			
+			// Check basic conversion
+			if len(anthropicMessages) != len(tt.messages) {
+				t.Errorf("Expected %d messages, got %d", len(tt.messages), len(anthropicMessages))
+			}
+			
+			// Check if URL context processing occurred
+			if tt.enableURL && len(tt.expectedURLs) > 0 {
+				// For URL context enabled cases, we expect the content to potentially be modified
+				// Note: In a real test environment, we would need to mock the HTTP client
+				// For now, we just verify the structure is correct
+				if len(anthropicMessages) == 0 {
+					t.Error("Expected at least one message after URL context processing")
+				}
+			}
+			
+			// Verify system message is handled correctly
+			if systemMessage != "" {
+				t.Logf("System message: %s", systemMessage)
+			}
+		})
+	}
+}
+
+// TestClaudeAdapter_URLValidation tests URL validation functionality
+func TestClaudeAdapter_URLValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		expected bool
+	}{
+		{
+			name:     "Valid HTTPS URL",
+			url:      "https://example.com",
+			expected: true,
+		},
+		{
+			name:     "Valid HTTP URL",
+			url:      "http://example.com",
+			expected: true,
+		},
+		{
+			name:     "Invalid URL - no scheme",
+			url:      "example.com",
+			expected: false,
+		},
+		{
+			name:     "Invalid URL - no host",
+			url:      "https://",
+			expected: false,
+		},
+		{
+			name:     "Invalid URL - malformed",
+			url:      "not-a-url",
+			expected: false,
+		},
+		{
+			name:     "Empty URL",
+			url:      "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidURL(tt.url)
+			if result != tt.expected {
+				t.Errorf("isValidURL(%q) = %v, want %v", tt.url, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestClaudeAdapter_HTMLStripping tests HTML stripping functionality
+func TestClaudeAdapter_HTMLStripping(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Basic HTML tags",
+			input:    "<p>Hello <strong>world</strong></p>",
+			expected: "Hello world",
+		},
+		{
+			name:     "Script tags removal",
+			input:    "<p>Content</p><script>alert(\"bad\")</script><p>More content</p>",
+			expected: "Content\n\nMore content",
+		},
+		{
+			name:     "Style tags removal",
+			input:    "<p>Content</p><style>body { color: red; }</style><p>More content</p>",
+			expected: "Content\n\nMore content",
+		},
+		{
+			name:     "Plain text",
+			input:    "Just plain text",
+			expected: "Just plain text",
+		},
+		{
+			name:     "Complex HTML",
+			input:    "<html><head><title>Test</title></head><body><div class=\"content\">Hello <a href=\"#\">world</a></div></body></html>",
+			expected: "Hello world",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripBasicHTML(tt.input)
+			result = strings.TrimSpace(result)
+			tt.expected = strings.TrimSpace(tt.expected)
+			
+			if result != tt.expected {
+				t.Errorf("stripBasicHTML(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+

@@ -113,16 +113,36 @@ func NewServer(cfg ServerConfig) *Server {
 func (s *Server) ConvertToOpenAIMessages(messages []adapter.Message) []openai.ChatCompletionMessageParamUnion {
 	result := make([]openai.ChatCompletionMessageParamUnion, len(messages))
 	for i, msg := range messages {
+		contentStr := s.getContentAsString(msg.Content)
 		switch msg.Role {
 		case "assistant":
-			result[i] = openai.AssistantMessage(msg.Content)
+			result[i] = openai.AssistantMessage(contentStr)
 		case "system":
-			result[i] = openai.SystemMessage(msg.Content)
+			result[i] = openai.SystemMessage(contentStr)
 		default:
-			result[i] = openai.UserMessage(msg.Content)
+			result[i] = openai.UserMessage(contentStr)
 		}
 	}
 	return result
+}
+
+// getContentAsString converts interface{} content to string
+func (s *Server) getContentAsString(content interface{}) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []adapter.ContentPart:
+		// Extract text from content parts
+		var textParts []string
+		for _, part := range c {
+			if part.Type == "text" {
+				textParts = append(textParts, part.Text)
+			}
+		}
+		return strings.Join(textParts, " ")
+	default:
+		return fmt.Sprintf("%v", content)
+	}
 }
 
 // HealthHandler handles health check requests
@@ -645,8 +665,9 @@ func (s *Server) estimateTokenUsage(messages []adapter.Message) int {
 	
 	for _, msg := range messages {
 		// Count characters and words
-		charCount := len(msg.Content)
-		wordCount := len(strings.Fields(msg.Content))
+		contentStr := s.getContentAsString(msg.Content)
+		charCount := len(contentStr)
+		wordCount := len(strings.Fields(contentStr))
 		
 		// Base token estimation using character count (more accurate than word count)
 		// GPT models use ~4 characters per token on average for English text
