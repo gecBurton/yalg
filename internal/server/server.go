@@ -20,7 +20,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	"github.com/openai/openai-go"
 )
 

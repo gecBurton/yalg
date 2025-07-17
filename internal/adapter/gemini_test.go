@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 )
 
 // testError is a simple error type for testing
@@ -186,7 +186,7 @@ func TestGeminiAdapter_ConvertToGeminiMessages(t *testing.T) {
 
 				// Check role conversion
 				for _, geminiMsg := range result {
-					if geminiMsg.Role != "user" && geminiMsg.Role != "model" {
+					if geminiMsg.Role != genai.RoleUser && geminiMsg.Role != genai.RoleModel {
 						t.Errorf("Invalid Gemini role: %s", geminiMsg.Role)
 					}
 				}
@@ -201,14 +201,18 @@ func TestGeminiAdapter_ConvertToGeminiMessages(t *testing.T) {
 					}
 
 					for i, msg := range result {
-						if msg.Role != expectedRoles[i] {
+						expectedRole := genai.RoleUser
+						if expectedRoles[i] == "model" {
+							expectedRole = genai.RoleModel
+						}
+						if msg.Role != expectedRole {
 							t.Errorf("Expected role %s at index %d, got %s", expectedRoles[i], i, msg.Role)
 						}
 					}
 
 					// Check that system message is prepended to first user message
-					if text, ok := result[0].Parts[0].(genai.Text); ok {
-						content := string(text)
+					if len(result[0].Parts) > 0 && result[0].Parts[0].Text != "" {
+						content := result[0].Parts[0].Text
 						if !strings.Contains(content, "System:") {
 							t.Error("Expected system message to be prepended to first user message")
 						}
@@ -237,7 +241,7 @@ func TestGeminiAdapter_ConvertGeminiToOpenAI(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Hello, how can I help you?")},
+							Parts: []*genai.Part{{Text: "Hello, how can I help you?"}},
 						},
 					},
 				},
@@ -255,12 +259,12 @@ func TestGeminiAdapter_ConvertGeminiToOpenAI(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("This is a test response.")},
+							Parts: []*genai.Part{{Text: "This is a test response."}},
 						},
 						FinishReason: genai.FinishReasonStop,
 					},
 				},
-				UsageMetadata: &genai.UsageMetadata{
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 					PromptTokenCount:     50,
 					CandidatesTokenCount: 25,
 					TotalTokenCount:      75,
@@ -274,7 +278,7 @@ func TestGeminiAdapter_ConvertGeminiToOpenAI(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text(`{"name": "John", "age": 30, "city": "New York"}`)},
+							Parts: []*genai.Part{{Text: `{"name": "John", "age": 30, "city": "New York"}`}},
 						},
 						FinishReason: genai.FinishReasonStop,
 					},
@@ -432,7 +436,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Hello")},
+							Parts: []*genai.Part{{Text: "Hello"}},
 						},
 					},
 				},
@@ -447,7 +451,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text(" world!")},
+							Parts: []*genai.Part{{Text: " world!"}},
 						},
 					},
 				},
@@ -462,7 +466,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Final chunk")},
+							Parts: []*genai.Part{{Text: "Final chunk"}},
 						},
 						FinishReason: genai.FinishReasonStop,
 					},
@@ -479,7 +483,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Truncated")},
+							Parts: []*genai.Part{{Text: "Truncated"}},
 						},
 						FinishReason: genai.FinishReasonMaxTokens,
 					},
@@ -496,7 +500,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Filtered")},
+							Parts: []*genai.Part{{Text: "Filtered"}},
 						},
 						FinishReason: genai.FinishReasonSafety,
 					},
@@ -513,7 +517,7 @@ func TestGeminiAdapter_StreamingChunkParsing(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("")},
+							Parts: []*genai.Part{{Text: ""}},
 						},
 					},
 				},
@@ -666,7 +670,7 @@ func TestGeminiAdapter_MessageFormatConversion(t *testing.T) {
 
 			// Check role conversion
 			for _, geminiMsg := range result {
-				if geminiMsg.Role != "user" && geminiMsg.Role != "model" {
+				if geminiMsg.Role != genai.RoleUser && geminiMsg.Role != genai.RoleModel {
 					t.Errorf("Invalid Gemini role: %s (expected 'user' or 'model')", geminiMsg.Role)
 				}
 			}
@@ -675,9 +679,9 @@ func TestGeminiAdapter_MessageFormatConversion(t *testing.T) {
 			if tt.expectedSystemHandling && tt.hasUserMessage && len(result) > 0 {
 				// Find the user message
 				for _, geminiMsg := range result {
-					if geminiMsg.Role == "user" && len(geminiMsg.Parts) > 0 {
-						if text, ok := geminiMsg.Parts[0].(genai.Text); ok {
-							content := string(text)
+					if geminiMsg.Role == genai.RoleUser && len(geminiMsg.Parts) > 0 {
+						if geminiMsg.Parts[0].Text != "" {
+							content := geminiMsg.Parts[0].Text
 							if !strings.Contains(content, "System:") {
 								t.Error("Expected system message to be prepended to user message")
 							}
@@ -727,7 +731,7 @@ func TestGeminiAdapter_SafetyAndFinishReasons(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Test response")},
+							Parts: []*genai.Part{{Text: "Test response"}},
 						},
 						FinishReason: tt.finishReason,
 					},
@@ -792,7 +796,7 @@ func TestGeminiAdapter_ToolCallNoArguments(t *testing.T) {
 
 	// Verify structure is valid
 	for _, msg := range result {
-		if msg.Role != "user" && msg.Role != "model" {
+		if msg.Role != genai.RoleUser && msg.Role != genai.RoleModel {
 			t.Errorf("Invalid role: %s", msg.Role)
 		}
 	}
@@ -830,9 +834,9 @@ func TestGeminiAdapter_ContextCaching(t *testing.T) {
 	// Find user message and check if system content is prepended
 	foundSystemContent := false
 	for _, msg := range result {
-		if msg.Role == "user" && len(msg.Parts) > 0 {
-			if text, ok := msg.Parts[0].(genai.Text); ok {
-				content := string(text)
+		if msg.Role == genai.RoleUser && len(msg.Parts) > 0 {
+			if msg.Parts[0].Text != "" {
+				content := msg.Parts[0].Text
 				if strings.Contains(content, "System:") {
 					foundSystemContent = true
 					break
@@ -878,8 +882,8 @@ func TestGeminiAdapter_ImageGeneration(t *testing.T) {
 	}
 
 	// Check content
-	if text, ok := result[0].Parts[0].(genai.Text); ok {
-		content := string(text)
+	if result[0].Parts[0].Text != "" {
+		content := result[0].Parts[0].Text
 		if !strings.Contains(content, "cat") {
 			t.Error("Expected content to contain 'cat'")
 		}
@@ -913,8 +917,8 @@ func TestGeminiAdapter_ThinkingMode(t *testing.T) {
 	}
 
 	// Check content contains the question
-	if text, ok := result[0].Parts[0].(genai.Text); ok {
-		content := string(text)
+	if result[0].Parts[0].Text != "" {
+		content := result[0].Parts[0].Text
 		if !strings.Contains(content, "Occam's Razor") {
 			t.Error("Expected content to contain 'Occam's Razor'")
 		}
@@ -945,8 +949,8 @@ func TestGeminiAdapter_URLContext(t *testing.T) {
 	}
 
 	// Check that URL is preserved in content
-	if text, ok := result[0].Parts[0].(genai.Text); ok {
-		content := string(text)
+	if result[0].Parts[0].Text != "" {
+		content := result[0].Parts[0].Text
 		if !strings.Contains(content, url) {
 			t.Error("Expected content to contain URL")
 		}
@@ -978,9 +982,9 @@ func TestGeminiAdapter_ToolUse(t *testing.T) {
 	// Check system message handling
 	foundSystemContent := false
 	for _, msg := range result {
-		if msg.Role == "user" && len(msg.Parts) > 0 {
-			if text, ok := msg.Parts[0].(genai.Text); ok {
-				content := string(text)
+		if msg.Role == genai.RoleUser && len(msg.Parts) > 0 {
+			if msg.Parts[0].Text != "" {
+				content := msg.Parts[0].Text
 				if strings.Contains(content, "System:") && strings.Contains(content, "Lima, Peru") {
 					foundSystemContent = true
 					break
@@ -1005,7 +1009,7 @@ func TestGeminiAdapter_StreamingToolUse(t *testing.T) {
 		Candidates: []*genai.Candidate{
 			{
 				Content: &genai.Content{
-					Parts: []genai.Part{genai.Text("I'll help you get the weather information.")},
+					Parts: []*genai.Part{{Text: "I'll help you get the weather information."}},
 				},
 				FinishReason: genai.FinishReasonStop,
 			},
@@ -1140,9 +1144,9 @@ func TestGeminiAdapter_ToolCallParsing(t *testing.T) {
 	}
 
 	// Test parsing tool calls
-	parts := []genai.Part{
-		genai.Text("I'll get the weather for you."),
-		mockFunctionCall,
+	parts := []*genai.Part{
+		{Text: "I'll get the weather for you."},
+		{FunctionCall: &mockFunctionCall},
 	}
 
 	toolCalls := adapter.parseToolCalls(parts)
@@ -1231,17 +1235,17 @@ func TestGeminiAdapter_MultiModalContent(t *testing.T) {
 	}
 
 	// Check text part
-	if textPart, ok := message.Parts[0].(genai.Text); ok {
-		if string(textPart) != "What's in this image?" {
-			t.Errorf("Expected text 'What's in this image?', got '%s'", string(textPart))
+	if message.Parts[0].Text != "" {
+		if message.Parts[0].Text != "What's in this image?" {
+			t.Errorf("Expected text 'What's in this image?', got '%s'", message.Parts[0].Text)
 		}
 	} else {
 		t.Error("Expected first part to be text")
 	}
 
 	// Check image part (should be converted from base64)
-	if imagePart, ok := message.Parts[1].(genai.Blob); ok {
-		if len(imagePart.Data) == 0 {
+	if message.Parts[1].InlineData != nil {
+		if len(message.Parts[1].InlineData.Data) == 0 {
 			t.Error("Expected image data to be present")
 		}
 	} else {
@@ -1299,8 +1303,8 @@ func TestGeminiAdapter_AdvancedContextCaching(t *testing.T) {
 	// Check all text parts for content
 	var allContent string
 	for _, part := range message.Parts {
-		if textPart, ok := part.(genai.Text); ok {
-			allContent += string(textPart)
+		if part.Text != "" {
+			allContent += part.Text
 		}
 	}
 
@@ -1325,7 +1329,7 @@ func TestGeminiAdapter_EmptyFunctionArguments(t *testing.T) {
 		Args: map[string]interface{}{}, // Empty arguments
 	}
 
-	parts := []genai.Part{mockFunctionCall}
+	parts := []*genai.Part{{FunctionCall: &mockFunctionCall}}
 	toolCalls := adapter.parseToolCalls(parts)
 
 	if len(toolCalls) != 1 {
@@ -1361,15 +1365,15 @@ func TestGeminiAdapter_ResponseWithToolCalls(t *testing.T) {
 		Candidates: []*genai.Candidate{
 			{
 				Content: &genai.Content{
-					Parts: []genai.Part{
-						genai.Text("I'll get the weather for you."),
-						mockFunctionCall,
+					Parts: []*genai.Part{
+						{Text: "I'll get the weather for you."},
+						{FunctionCall: &mockFunctionCall},
 					},
 				},
 				FinishReason: genai.FinishReasonStop,
 			},
 		},
-		UsageMetadata: &genai.UsageMetadata{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 			PromptTokenCount:     50,
 			CandidatesTokenCount: 25,
 			TotalTokenCount:      75,
@@ -1464,9 +1468,9 @@ func TestGeminiAdapter_StreamingWithToolCalls(t *testing.T) {
 		Candidates: []*genai.Candidate{
 			{
 				Content: &genai.Content{
-					Parts: []genai.Part{
-						genai.Text("I'll help you with the weather."),
-						mockFunctionCall,
+					Parts: []*genai.Part{
+						{Text: "I'll help you with the weather."},
+						{FunctionCall: &mockFunctionCall},
 					},
 				},
 				FinishReason: genai.FinishReasonStop,
@@ -1557,7 +1561,7 @@ func TestGeminiAdapter_FinishReasonMapping(t *testing.T) {
 				Candidates: []*genai.Candidate{
 					{
 						Content: &genai.Content{
-							Parts: []genai.Part{genai.Text("Test response")},
+							Parts: []*genai.Part{{Text: "Test response"}},
 						},
 						FinishReason: tt.finishReason,
 					},
@@ -1609,8 +1613,8 @@ func TestDebugToolUse(t *testing.T) {
 	for i, msg := range result {
 		fmt.Printf("Message %d: Role=%s, Parts=%d\n", i, msg.Role, len(msg.Parts))
 		for j, part := range msg.Parts {
-			if text, ok := part.(genai.Text); ok {
-				fmt.Printf("  Part %d: %s\n", j, string(text))
+			if part.Text != "" {
+				fmt.Printf("  Part %d: %s\n", j, part.Text)
 			}
 		}
 	}
@@ -1618,9 +1622,9 @@ func TestDebugToolUse(t *testing.T) {
 	// Check system message handling
 	foundSystemContent := false
 	for _, msg := range result {
-		if msg.Role == "user" && len(msg.Parts) > 0 {
-			if text, ok := msg.Parts[0].(genai.Text); ok {
-				content := string(text)
+		if msg.Role == genai.RoleUser && len(msg.Parts) > 0 {
+			if msg.Parts[0].Text != "" {
+				content := msg.Parts[0].Text
 				fmt.Printf("User message content: %s\n", content)
 				if strings.Contains(content, "System:") && strings.Contains(content, "Lima, Peru") {
 					foundSystemContent = true

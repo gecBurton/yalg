@@ -17,12 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/azure"
 	"github.com/openai/openai-go/option"
-	googleOption "google.golang.org/api/option"
 )
 
 const (
@@ -181,7 +180,10 @@ func initializeGoogleAI(cfg *config.Config) *genai.Client {
 		return nil
 	}
 
-	client, err := genai.NewClient(context.Background(), googleOption.WithAPIKey(apiKey))
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
 	if err != nil {
 		log.Printf("Warning: Failed to create Gemini client: %v", err)
 		return nil

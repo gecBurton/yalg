@@ -13,9 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/googleapi"
-	"google.golang.org/api/iterator"
+	"google.golang.org/genai"
 )
 
 // sanitizeError removes API keys from error messages for secure logging
@@ -51,37 +49,42 @@ func (a *GeminiAdapter) IsGeminiModel(model string) bool {
 }
 
 // convertContentToGeminiParts converts OpenAI content to Gemini parts
-func (a *GeminiAdapter) convertContentToGeminiParts(content interface{}) ([]genai.Part, error) {
+func (a *GeminiAdapter) convertContentToGeminiParts(content interface{}) ([]*genai.Part, error) {
 	switch c := content.(type) {
 	case string:
-		return []genai.Part{genai.Text(c)}, nil
+		return []*genai.Part{genai.NewPartFromText(c)}, nil
 	case []ContentPart:
-		var parts []genai.Part
+		var parts []*genai.Part
 		for _, part := range c {
 			switch part.Type {
 			case "text":
-				parts = append(parts, genai.Text(part.Text))
+				parts = append(parts, genai.NewPartFromText(part.Text))
 			case "image_url":
 				if part.ImageURL != nil {
 					// Handle base64 encoded images
 					if strings.HasPrefix(part.ImageURL.URL, "data:") {
 						// Parse data URL
-						parts = append(parts, a.convertDataURLToGeminiPart(part.ImageURL.URL))
+						imagePart, err := a.convertDataURLToGeminiPart(part.ImageURL.URL)
+						if err != nil {
+							parts = append(parts, genai.NewPartFromText("Error processing image"))
+						} else {
+							parts = append(parts, imagePart)
+						}
 					} else {
 						// Handle regular URLs - in real implementation you'd fetch and convert
-						parts = append(parts, genai.Text(fmt.Sprintf("Image URL: %s", part.ImageURL.URL)))
+						parts = append(parts, genai.NewPartFromText(fmt.Sprintf("Image URL: %s", part.ImageURL.URL)))
 					}
 				}
 			}
 		}
 		return parts, nil
 	default:
-		return []genai.Part{genai.Text(fmt.Sprintf("%v", content))}, nil
+		return []*genai.Part{genai.NewPartFromText(fmt.Sprintf("%v", content))}, nil
 	}
 }
 
 // convertDataURLToGeminiPart converts a data URL to a Gemini part
-func (a *GeminiAdapter) convertDataURLToGeminiPart(dataURL string) genai.Part {
+func (a *GeminiAdapter) convertDataURLToGeminiPart(dataURL string) (*genai.Part, error) {
 	// Parse data URL format: data:image/jpeg;base64,{base64data}
 	re := regexp.MustCompile(`^data:([^;]+);base64,(.+)$`)
 	matches := re.FindStringSubmatch(dataURL)
@@ -93,14 +96,14 @@ func (a *GeminiAdapter) convertDataURLToGeminiPart(dataURL string) genai.Part {
 		// Decode base64
 		data, err := base64.StdEncoding.DecodeString(base64Data)
 		if err != nil {
-			return genai.Text("Error decoding image data")
+			return nil, fmt.Errorf("failed to decode base64 data: %v", err)
 		}
 		
 		// Create image part
-		return genai.ImageData(mimeType, data)
+		return genai.NewPartFromBytes(data, mimeType), nil
 	}
 	
-	return genai.Text("Invalid image data")
+	return nil, fmt.Errorf("invalid data URL format")
 }
 
 // ConvertToGeminiMessages converts OpenAI messages to Gemini format with multi-modal support
@@ -132,16 +135,16 @@ func (a *GeminiAdapter) ConvertToGeminiMessagesWithURLContext(messages []Message
 			continue // Skip system messages, they're handled separately
 		}
 
-		var role string
+		var role genai.Role
 		switch msg.Role {
 		case "user":
-			role = "user"
+			role = genai.RoleUser
 		case "assistant":
-			role = "model"
+			role = genai.RoleModel
 		case "tool":
-			role = "user" // Tool responses are treated as user messages
+			role = genai.RoleUser // Tool responses are treated as user messages
 		default:
-			role = "user"
+			role = genai.RoleUser
 		}
 
 		// Process URL context for user messages if enabled
@@ -159,33 +162,30 @@ func (a *GeminiAdapter) ConvertToGeminiMessagesWithURLContext(messages []Message
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
 				toolText := fmt.Sprintf("Tool Call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
-				parts = append(parts, genai.Text(toolText))
+				parts = append(parts, genai.NewPartFromText(toolText))
 			}
 		}
 
-		geminiMessages = append(geminiMessages, &genai.Content{
-			Parts: parts,
-			Role:  role,
-		})
+		geminiMessages = append(geminiMessages, genai.NewContentFromParts(parts, role))
 	}
 
 	// Prepend system messages to first user message
 	if len(systemMessages) > 0 && len(geminiMessages) > 0 {
 		for i, msg := range geminiMessages {
-			if msg.Role == "user" {
+			if msg.Role == genai.RoleUser {
 				systemPrompt := strings.Join(systemMessages, "\n\n")
 				
 				// Get the user content
 				var userContent string
 				if len(msg.Parts) > 0 {
-					if text, ok := msg.Parts[0].(genai.Text); ok {
-						userContent = string(text)
+					if msg.Parts[0].Text != "" {
+						userContent = msg.Parts[0].Text
 					}
 				}
 				
 				// Create single combined part
 				combinedContent := fmt.Sprintf("System: %s\n\n%s", systemPrompt, userContent)
-				geminiMessages[i].Parts = []genai.Part{genai.Text(combinedContent)}
+				geminiMessages[i] = genai.NewContentFromText(combinedContent, genai.RoleUser)
 				break
 			}
 		}
@@ -274,13 +274,13 @@ func generateToolCallID() string {
 }
 
 // parseToolCalls extracts tool calls from Gemini response parts
-func (a *GeminiAdapter) parseToolCalls(parts []genai.Part) []ToolCall {
+func (a *GeminiAdapter) parseToolCalls(parts []*genai.Part) []ToolCall {
 	var toolCalls []ToolCall
 	
 	for _, part := range parts {
-		if fc, ok := part.(genai.FunctionCall); ok {
+		if part.FunctionCall != nil {
 			// Convert function call arguments to JSON string
-			argsJSON, err := json.Marshal(fc.Args)
+			argsJSON, err := json.Marshal(part.FunctionCall.Args)
 			if err != nil {
 				argsJSON = []byte("{}")
 			}
@@ -289,7 +289,7 @@ func (a *GeminiAdapter) parseToolCalls(parts []genai.Part) []ToolCall {
 				ID:   generateToolCallID(),
 				Type: "function",
 				Function: FunctionCall{
-					Name:      fc.Name,
+					Name:      part.FunctionCall.Name,
 					Arguments: string(argsJSON),
 				},
 			}
@@ -312,8 +312,8 @@ func (a *GeminiAdapter) ConvertGeminiToOpenAI(geminiResp *genai.GenerateContentR
 		// Extract content and tool calls from parts
 		var textParts []string
 		for _, part := range candidate.Content.Parts {
-			if text, ok := part.(genai.Text); ok {
-				textParts = append(textParts, string(text))
+			if part.Text != "" {
+				textParts = append(textParts, part.Text)
 			}
 		}
 		content = strings.Join(textParts, "")
@@ -440,8 +440,8 @@ func (a *GeminiAdapter) ConvertGeminiStreamToOpenAI(resp *genai.GenerateContentR
 		// Handle text content
 		var textContent string
 		for _, part := range candidate.Content.Parts {
-			if text, ok := part.(genai.Text); ok {
-				textContent += string(text)
+			if part.Text != "" {
+				textContent += part.Text
 			}
 		}
 		
@@ -494,44 +494,42 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 	}
 	log.Printf("Using Gemini model ID: %s", modelName)
 
-	model := a.client.GenerativeModel(modelName)
-
-	// Configure model settings
-	model.GenerationConfig = genai.GenerationConfig{
+	// Create generate content config
+	config := &genai.GenerateContentConfig{
 		Temperature:     genai.Ptr(float32(0.7)),
-		TopK:            genai.Ptr(int32(40)),
+		TopK:            genai.Ptr(float32(40)),
 		TopP:            genai.Ptr(float32(0.9)),
-		MaxOutputTokens: genai.Ptr(int32(2048)),
+		MaxOutputTokens: 2048,
 	}
 
 	// Configure safety settings to be more permissive
-	model.SafetySettings = []*genai.SafetySetting{
+	config.SafetySettings = []*genai.SafetySetting{
 		{
 			Category:  genai.HarmCategoryHarassment,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategoryHateSpeech,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategorySexuallyExplicit,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategoryDangerousContent,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 	}
 
 	// Configure tools if provided
 	if len(req.Tools) > 0 {
 		geminiTools := a.convertOpenAIToolsToGemini(req.Tools)
-		model.Tools = geminiTools
+		config.Tools = geminiTools
 		log.Printf("Configured %d tools for Gemini model", len(geminiTools))
 	}
 
-	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
+	log.Printf("Model configuration: %+v", config)
 
 	// Check if URL context processing is enabled
 	enableURLContext := req.URLContext != nil
@@ -552,54 +550,11 @@ func (a *GeminiAdapter) HandleRequest(req ChatRequest) (map[string]interface{}, 
 		return nil, fmt.Errorf("no valid messages to process")
 	}
 
-	var resp *genai.GenerateContentResponse
-
-	if len(geminiMessages) == 1 {
-		// Single message, use direct generation instead of chat
-		var prompt string
-		if len(geminiMessages[0].Parts) > 0 {
-			if text, ok := geminiMessages[0].Parts[0].(genai.Text); ok {
-				prompt = string(text)
-			}
-		}
-
-		if prompt == "" {
-			return nil, fmt.Errorf("empty prompt for single message request")
-		}
-
-		log.Printf("Using direct generation for single message")
-		log.Printf("Prompt length: %d characters", len(prompt))
-		resp, err = model.GenerateContent(context.Background(), genai.Text(prompt))
-	} else {
-		// Multiple messages, use chat session
-		cs := model.StartChat()
-		cs.History = geminiMessages[:len(geminiMessages)-1] // All but last message as history
-
-		// Get the last message content
-		var prompt string
-		if len(geminiMessages) > 0 {
-			lastMsg := geminiMessages[len(geminiMessages)-1]
-			if len(lastMsg.Parts) > 0 {
-				if text, ok := lastMsg.Parts[0].(genai.Text); ok {
-					prompt = string(text)
-				}
-			}
-		}
-
-		if prompt == "" {
-			return nil, fmt.Errorf("empty prompt for chat session request")
-		}
-
-		log.Printf("Using chat session")
-		log.Printf("Prompt length: %d characters", len(prompt))
-		resp, err = cs.SendMessage(context.Background(), genai.Text(prompt))
-	}
+	log.Printf("Using generate content with %d messages", len(geminiMessages))
+	resp, err := a.client.Models.GenerateContent(context.Background(), modelName, geminiMessages, config)
 
 	if err != nil {
 		log.Printf("Gemini error for model %s: %s", req.Model, sanitizeError(err))
-		if gerr, ok := err.(*googleapi.Error); ok {
-			log.Printf("Google API Error - Code: %d, Message: %s", gerr.Code, gerr.Message)
-		}
 		return nil, fmt.Errorf("gemini API error: %s", sanitizeError(err))
 	}
 
@@ -619,44 +574,42 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 	}
 	log.Printf("Using Gemini model ID: %s", modelName)
 
-	model := a.client.GenerativeModel(modelName)
-
-	// Configure model settings
-	model.GenerationConfig = genai.GenerationConfig{
+	// Create generate content config
+	config := &genai.GenerateContentConfig{
 		Temperature:     genai.Ptr(float32(0.7)),
-		TopK:            genai.Ptr(int32(40)),
+		TopK:            genai.Ptr(float32(40)),
 		TopP:            genai.Ptr(float32(0.9)),
-		MaxOutputTokens: genai.Ptr(int32(2048)),
+		MaxOutputTokens: 2048,
 	}
 
 	// Configure tools if provided
 	if len(req.Tools) > 0 {
 		geminiTools := a.convertOpenAIToolsToGemini(req.Tools)
-		model.Tools = geminiTools
+		config.Tools = geminiTools
 		log.Printf("Configured %d tools for streaming Gemini model", len(geminiTools))
 	}
 
 	// Configure safety settings to be more permissive
-	model.SafetySettings = []*genai.SafetySetting{
+	config.SafetySettings = []*genai.SafetySetting{
 		{
 			Category:  genai.HarmCategoryHarassment,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategoryHateSpeech,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategorySexuallyExplicit,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 		{
 			Category:  genai.HarmCategoryDangerousContent,
-			Threshold: genai.HarmBlockMediumAndAbove,
+			Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
 		},
 	}
 
-	log.Printf("Model configuration - Generation: %+v, Safety: %+v", model.GenerationConfig, model.SafetySettings)
+	log.Printf("Model configuration: %+v", config)
 
 	// Check if URL context processing is enabled
 	enableURLContext := req.URLContext != nil
@@ -672,112 +625,33 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 
 	log.Printf("Converted to %d Gemini messages", len(geminiMessages))
 
-	// Handle case where we have no messages or only one message
+	// Handle case where we have no messages
 	if len(geminiMessages) == 0 {
 		return fmt.Errorf("no valid messages to process")
 	}
 
-	if len(geminiMessages) == 1 {
-		// Single message, use direct generation instead of chat
-		var prompt string
-		if len(geminiMessages[0].Parts) > 0 {
-			if text, ok := geminiMessages[0].Parts[0].(genai.Text); ok {
-				prompt = string(text)
-			}
+	log.Printf("Using streaming generation with %d messages", len(geminiMessages))
+
+	// Use the new streaming API
+	stream := a.client.Models.GenerateContentStream(context.Background(), modelName, geminiMessages, config)
+
+	isFirst := true
+	for resp, err := range stream {
+		if err != nil {
+			log.Printf("Gemini streaming error for model %s: %s", req.Model, sanitizeError(err))
+			return fmt.Errorf("gemini API error: %s", sanitizeError(err))
 		}
 
-		if prompt == "" {
-			return fmt.Errorf("empty prompt for single message request")
-		}
+		// Convert to OpenAI format
+		openaiChunk := a.ConvertGeminiStreamToOpenAI(resp, req.Model, isFirst)
+		isFirst = false
 
-		log.Printf("Using direct generation for single message: %s", prompt)
-		log.Printf("Prompt length: %d characters", len(prompt))
+		// Send as SSE
+		data, _ := json.Marshal(openaiChunk)
+		w.Write([]byte("data: " + string(data) + "\n\n"))
 
-		// Try a more explicit approach with Content structure
-		content := &genai.Content{
-			Parts: []genai.Part{genai.Text(prompt)},
-			Role:  "user",
-		}
-
-		log.Printf("Creating stream with content: %+v", content)
-		iter := model.GenerateContentStream(context.Background(), content.Parts...)
-
-		isFirst := true
-		for {
-			resp, err := iter.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Printf("Gemini streaming error for model %s: %s", req.Model, sanitizeError(err))
-
-				if gerr, ok := err.(*googleapi.Error); ok {
-					log.Printf("Google API Error - Code: %d, Message: '%s'", gerr.Code, gerr.Message)
-				}
-
-				// Already logged with sanitizeError above
-
-				return fmt.Errorf("gemini API error: %s", sanitizeError(err))
-			}
-
-			// Convert to OpenAI format
-			openaiChunk := a.ConvertGeminiStreamToOpenAI(resp, req.Model, isFirst)
-			isFirst = false
-
-			// Send as SSE
-			data, _ := json.Marshal(openaiChunk)
-			w.Write([]byte("data: " + string(data) + "\n\n"))
-
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-		}
-	} else {
-		// Multiple messages, use chat session
-		cs := model.StartChat()
-		cs.History = geminiMessages[:len(geminiMessages)-1] // All but last message as history
-
-		// Get the last message content
-		var prompt string
-		if len(geminiMessages) > 0 {
-			lastMsg := geminiMessages[len(geminiMessages)-1]
-			if len(lastMsg.Parts) > 0 {
-				if text, ok := lastMsg.Parts[0].(genai.Text); ok {
-					prompt = string(text)
-				}
-			}
-		}
-
-		if prompt == "" {
-			return fmt.Errorf("empty prompt for chat session request")
-		}
-
-		log.Printf("Using chat session with prompt: %s", prompt)
-		log.Printf("Prompt length: %d characters", len(prompt))
-		iter := cs.SendMessageStream(context.Background(), genai.Text(prompt))
-
-		isFirst := true
-		for {
-			resp, err := iter.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Printf("Gemini streaming error for model %s: %s", req.Model, sanitizeError(err))
-				return fmt.Errorf("gemini API error: %s", sanitizeError(err))
-			}
-
-			// Convert to OpenAI format
-			openaiChunk := a.ConvertGeminiStreamToOpenAI(resp, req.Model, isFirst)
-			isFirst = false
-
-			// Send as SSE
-			data, _ := json.Marshal(openaiChunk)
-			w.Write([]byte("data: " + string(data) + "\n\n"))
-
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
 		}
 	}
 
