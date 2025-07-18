@@ -179,3 +179,65 @@ models:
     supports_streaming: true
     enabled: true
     rate_limit: 60
+
+  # Azure OpenAI Embedding Models
+  text-embedding-3-large:
+    provider: azure-openai
+    model_name: "text-embedding-3-large"
+    display_name: "Text Embedding 3 Large"
+    description: "Most capable embedding model"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 150
+
+  text-embedding-3-small:
+    provider: azure-openai
+    model_name: "text-embedding-3-small"
+    display_name: "Text Embedding 3 Small"
+    description: "Fast and efficient embedding model"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 200
+
+  text-embedding-ada-002:
+    provider: azure-openai
+    model_name: "text-embedding-ada-002"
+    display_name: "Text Embedding Ada 002"
+    description: "Previous generation embedding model"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 120
+
+  # Direct OpenAI Embedding Models
+  openai-text-embedding-3-large:
+    provider: openai
+    model_name: "text-embedding-3-large"
+    display_name: "Text Embedding 3 Large (OpenAI)"
+    description: "Most capable embedding model via OpenAI API"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100
+
+  openai-text-embedding-3-small:
+    provider: openai
+    model_name: "text-embedding-3-small"
+    display_name: "Text Embedding 3 Small (OpenAI)"
+    description: "Fast and efficient embedding model via OpenAI API"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 150
+
+  openai-text-embedding-ada-002:
+    provider: openai
+    model_name: "text-embedding-ada-002"
+    display_name: "Text Embedding Ada 002 (OpenAI)"
+    description: "Previous generation embedding model via OpenAI API"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100

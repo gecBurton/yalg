@@ -58,6 +58,36 @@ type ErrorResponse struct {
 	} `json:"error"`
 }
 
+// EmbeddingRequest represents an embedding request
+type EmbeddingRequest struct {
+	Input          interface{} `json:"input"`          // Can be string or []string
+	Model          string      `json:"model"`
+	EncodingFormat string      `json:"encoding_format,omitempty"`
+	Dimensions     int         `json:"dimensions,omitempty"`
+	User           string      `json:"user,omitempty"`
+}
+
+// EmbeddingData represents a single embedding result
+type EmbeddingData struct {
+	Object    string    `json:"object"`
+	Index     int       `json:"index"`
+	Embedding []float32 `json:"embedding"`
+}
+
+// EmbeddingUsage represents token usage for embeddings
+type EmbeddingUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// EmbeddingResponse represents an embedding response
+type EmbeddingResponse struct {
+	Object string           `json:"object"`
+	Data   []EmbeddingData  `json:"data"`
+	Model  string           `json:"model"`
+	Usage  EmbeddingUsage   `json:"usage"`
+}
+
 // ServerConfig holds configuration for the server
 type ServerConfig struct {
 	Config             *config.Config
@@ -563,6 +593,239 @@ func (s *Server) extractTokenUsage(openaiResp map[string]any, metric *database.R
 			metric.ResponseTokens = completionTokens
 		}
 	}
+}
+
+// EmbeddingHandler handles embedding requests
+func (s *Server) EmbeddingHandler(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
+
+	// Set CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	log.Printf("Request [%s]: %s %s from %s", requestID, r.Method, r.URL.Path, r.RemoteAddr)
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	var req EmbeddingRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Model == "" {
+		http.Error(w, "Model field is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate model
+	if err := s.router.ValidateModel(req.Model); err != nil {
+		providerErr := s.errorHandler.CreateValidationError(
+			config.ProviderType("unknown"),
+			fmt.Sprintf("Invalid model: %s", err.Error()),
+			map[string]any{"model": req.Model},
+		)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, false)
+		return
+	}
+
+	// Detect provider
+	provider, err := s.router.DetectProvider(req.Model)
+	if err != nil {
+		providerErr := s.errorHandler.CreateValidationError("", err.Error(), nil)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, false)
+		return
+	}
+
+	// Check rate limiting
+	if allowed, retryAfter := s.database.CheckRate(provider); !allowed {
+		providerErr := s.errorHandler.CreateRateLimitError(provider, retryAfter)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, false)
+		return
+	}
+
+	// Get the actual model name for API calls
+	actualModelName, err := s.router.GetModelName(req.Model)
+	if err != nil {
+		providerErr := s.errorHandler.CreateValidationError(
+			provider,
+			fmt.Sprintf("Failed to get model name: %s", err.Error()),
+			map[string]any{"route": req.Model},
+		)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, false)
+		return
+	}
+
+	// Get user information from context (if authenticated)
+	var userID string
+	if user, ok := auth.GetUserFromContext(r.Context()); ok {
+		userID = user.ID
+	}
+
+	// Record request start
+	metric := database.RequestMetrics{
+		ID:        requestID,
+		Timestamp: startTime,
+		Provider:  provider,
+		Model:     req.Model, // Keep original model name for metrics
+		StartTime: startTime,
+		Streaming: false, // Embeddings don't support streaming
+		UserAgent: r.UserAgent(),
+		ClientIP:  r.RemoteAddr,
+	}
+
+	// Only handle OpenAI providers for embeddings
+	var responseErr error
+	switch provider {
+	case config.ProviderAzureOpenAI, config.ProviderOpenAI:
+		responseErr = s.handleEmbedding(req, actualModelName, w, &metric, provider)
+	default:
+		providerErr := s.errorHandler.CreateValidationError(
+			provider,
+			fmt.Sprintf("Embeddings are not supported for provider %s", provider),
+			map[string]any{"provider": string(provider)},
+		)
+		s.sendErrorResponse(w, providerErr, requestID, req.Model, false)
+		responseErr = providerErr
+	}
+
+	// Complete metrics
+	metric.EndTime = time.Now()
+	metric.Duration = metric.EndTime.Sub(metric.StartTime)
+	metric.Success = (responseErr == nil)
+
+	if responseErr != nil {
+		if providerErr, ok := responseErr.(*errors.ProviderError); ok {
+			metric.ErrorType = string(providerErr.Type)
+			metric.ErrorMessage = providerErr.Message
+			metric.StatusCode = providerErr.HTTPStatus
+		} else {
+			metric.ErrorType = "unknown"
+			metric.ErrorMessage = responseErr.Error()
+			metric.StatusCode = 500
+		}
+	} else {
+		metric.StatusCode = 200
+	}
+
+	// Record metrics
+	s.database.RecordRequest(metric, userID)
+}
+
+// handleEmbedding processes embedding requests for OpenAI providers
+func (s *Server) handleEmbedding(req EmbeddingRequest, actualModelName string, w http.ResponseWriter, metric *database.RequestMetrics, provider config.ProviderType) error {
+	log.Printf("Routing to embedding model: %s via provider: %s", actualModelName, provider)
+
+	client, err := s.getOpenAIClient(provider)
+	if err != nil {
+		return s.errorHandler.HandleError(err, provider, map[string]any{"model": req.Model})
+	}
+
+	// Convert input to the format expected by OpenAI SDK
+	var input []string
+	switch v := req.Input.(type) {
+	case string:
+		input = []string{v}
+	case []string:
+		input = v
+	case []interface{}:
+		input = make([]string, len(v))
+		for i, item := range v {
+			if str, ok := item.(string); ok {
+				input[i] = str
+			} else {
+				return s.errorHandler.CreateValidationError(provider, "All input items must be strings", nil)
+			}
+		}
+	default:
+		return s.errorHandler.CreateValidationError(provider, "Input must be a string or array of strings", nil)
+	}
+
+	// Try using JSON marshaling/unmarshaling to work around union type issues
+	requestBody := map[string]interface{}{
+		"input": input,
+		"model": actualModelName,
+	}
+
+	if req.EncodingFormat != "" {
+		requestBody["encoding_format"] = req.EncodingFormat
+	}
+
+	if req.Dimensions > 0 {
+		requestBody["dimensions"] = req.Dimensions
+	}
+
+	if req.User != "" {
+		requestBody["user"] = req.User
+	}
+
+	// Marshal to JSON and back to create the correct union type
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return s.errorHandler.CreateValidationError(provider, "Failed to marshal request", nil)
+	}
+
+	var params openai.EmbeddingNewParams
+	if err := json.Unmarshal(jsonData, &params); err != nil {
+		return s.errorHandler.CreateValidationError(provider, "Failed to unmarshal request", nil)
+	}
+
+	// Make the request
+	embedding, err := client.Embeddings.New(context.Background(), params)
+	if err != nil {
+		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
+	}
+
+	// Convert OpenAI response to our format
+	data := make([]EmbeddingData, len(embedding.Data))
+	for i, item := range embedding.Data {
+		// Convert []float64 to []float32
+		embedding32 := make([]float32, len(item.Embedding))
+		for j, val := range item.Embedding {
+			embedding32[j] = float32(val)
+		}
+		
+		data[i] = EmbeddingData{
+			Object:    "embedding",
+			Index:     int(item.Index),
+			Embedding: embedding32,
+		}
+	}
+
+	response := EmbeddingResponse{
+		Object: "list",
+		Data:   data,
+		Model:  req.Model, // Return original model name
+		Usage: EmbeddingUsage{
+			PromptTokens: int(embedding.Usage.PromptTokens),
+			TotalTokens:  int(embedding.Usage.TotalTokens),
+		},
+	}
+
+	// Update metrics with token usage
+	metric.TokensUsed = int(embedding.Usage.TotalTokens)
+	metric.PromptTokens = int(embedding.Usage.PromptTokens)
+	metric.ResponseTokens = 0 // Embeddings don't have response tokens
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	return nil
 }
 
 // ModelsHandler returns available models

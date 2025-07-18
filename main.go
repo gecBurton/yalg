@@ -238,6 +238,7 @@ func setupRoutes(srv *server.Server, authMiddleware *auth.AuthMiddleware, authHa
 
 	// API routes (always require authentication)
 	http.HandleFunc("/v1/chat/completions", authMiddleware.RequireAuth(srv.ChatCompletionHandler))
+	http.HandleFunc("/v1/embeddings", authMiddleware.RequireAuth(srv.EmbeddingHandler))
 	http.HandleFunc("/v1/models", authMiddleware.RequireAuth(srv.ModelsHandler))
 }
 
