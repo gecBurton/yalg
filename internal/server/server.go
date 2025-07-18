@@ -20,8 +20,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"google.golang.org/genai"
 	"github.com/openai/openai-go"
+	"google.golang.org/genai"
 )
 
 // TokenUsage represents token usage information
@@ -41,12 +41,12 @@ type ChatChoice struct {
 
 // ChatResponse represents a chat completion response
 type ChatResponse struct {
-	ID      string      `json:"id"`
-	Object  string      `json:"object"`
-	Created int64       `json:"created"`
-	Model   string      `json:"model"`
+	ID      string       `json:"id"`
+	Object  string       `json:"object"`
+	Created int64        `json:"created"`
+	Model   string       `json:"model"`
 	Choices []ChatChoice `json:"choices"`
-	Usage   TokenUsage  `json:"usage"`
+	Usage   TokenUsage   `json:"usage"`
 }
 
 // ErrorResponse represents an API error response
@@ -60,16 +60,16 @@ type ErrorResponse struct {
 
 // ServerConfig holds configuration for the server
 type ServerConfig struct {
-	Config            *config.Config
-	BedrockClient     *bedrockruntime.Client
-	GeminiClient      *genai.Client
-	AzureOpenAIClient *openai.Client
+	Config             *config.Config
+	BedrockClient      *bedrockruntime.Client
+	GeminiClient       *genai.Client
+	AzureOpenAIClient  *openai.Client
 	DirectOpenAIClient *openai.Client
-	AnthropicAPIKey   string
-	AWSConfig         *aws.Config
-	Database          *database.DB
-	ErrorHandler      *errors.ErrorHandler
-	Router            *router.Router
+	AnthropicAPIKey    string
+	AWSConfig          *aws.Config
+	Database           *database.DB
+	ErrorHandler       *errors.ErrorHandler
+	Router             *router.Router
 }
 
 // Server provides LLM gateway functionality with metrics, rate limiting, etc.
@@ -166,10 +166,10 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 	if s.config.Metrics.Enabled {
 		usage := s.database.GetUsageStats()
 		health["usage"] = map[string]any{
-			"total_requests":     usage.TotalRequests,
+			"total_requests":      usage.TotalRequests,
 			"successful_requests": usage.SuccessfulRequests,
-			"failed_requests":    usage.FailedRequests,
-			"average_latency":    usage.AverageLatency,
+			"failed_requests":     usage.FailedRequests,
+			"average_latency":     usage.AverageLatency,
 		}
 	}
 
@@ -180,7 +180,7 @@ func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 // UIHandler serves the UI HTML file
 func (s *Server) UIHandler(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "ui.html")
+	http.ServeFile(w, r, "index.html")
 }
 
 // ChatCompletionHandler handles chat completion requests
@@ -330,7 +330,6 @@ func (s *Server) ChatCompletionHandler(w http.ResponseWriter, r *http.Request) {
 		metric.StatusCode = 200
 	}
 
-
 	// Record metrics
 	s.database.RecordRequest(metric, userID)
 }
@@ -449,7 +448,7 @@ func (s *Server) handleOpenAI(req adapter.ChatRequest, w http.ResponseWriter, me
 	if err != nil {
 		return s.errorHandler.HandleError(err, config.ProviderOpenAI, map[string]any{"model": req.Model})
 	}
-	
+
 	client, err := s.getOpenAIClient(provider)
 	if err != nil {
 		return s.errorHandler.HandleError(err, provider, map[string]any{"model": req.Model})
@@ -507,7 +506,7 @@ func (s *Server) handleStreamingRequest(
 
 	// For streaming requests, estimate token usage based on message content
 	metric.TokensUsed = s.estimateTokenUsage(req.Messages)
-	metric.PromptTokens = metric.TokensUsed * 7 / 10  // Estimate ~70% prompt, 30% response
+	metric.PromptTokens = metric.TokensUsed * 7 / 10 // Estimate ~70% prompt, 30% response
 	metric.ResponseTokens = metric.TokensUsed - metric.PromptTokens
 
 	return err
@@ -662,36 +661,36 @@ func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 // Based on tiktoken approximations used in LiteLLM
 func (s *Server) estimateTokenUsage(messages []adapter.Message) int {
 	totalTokens := 0
-	
+
 	for _, msg := range messages {
 		// Count characters and words
 		contentStr := s.getContentAsString(msg.Content)
 		charCount := len(contentStr)
 		wordCount := len(strings.Fields(contentStr))
-		
+
 		// Base token estimation using character count (more accurate than word count)
 		// GPT models use ~4 characters per token on average for English text
 		tokenEstimate := charCount / 4
-		
+
 		// Alternative estimation using word count (~1.3 tokens per word)
 		wordTokenEstimate := (wordCount * 13) / 10
-		
+
 		// Use the higher of the two estimates for better accuracy
 		msgTokens := tokenEstimate
 		if wordTokenEstimate > tokenEstimate {
 			msgTokens = wordTokenEstimate
 		}
-		
+
 		// Add overhead for message structure (3-4 tokens per message)
 		msgTokens += 3
-		
+
 		totalTokens += msgTokens
 	}
-	
+
 	// Minimum of 1 token for empty input
 	if totalTokens < 1 {
 		totalTokens = 1
 	}
-	
+
 	return totalTokens
 }

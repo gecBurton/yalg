@@ -48,6 +48,7 @@ type ServerConfig struct {
 	MaxRequestSize int64         `json:"max_request_size"`
 	EnableCORS     bool          `json:"enable_cors"`
 	TrustedProxies []string      `json:"trusted_proxies"`
+	UITheme        string        `json:"ui_theme"`
 }
 
 // MetricsConfig holds metrics and monitoring configuration
@@ -87,6 +88,7 @@ type AuthConfig struct {
 	ClientSecret string `json:"-"` // Hidden in JSON for security
 	RedirectURI  string `json:"redirect_uri"`
 	BaseURL      string `json:"base_url"`
+	IssuerURL    string `json:"issuer_url"`
 }
 
 // LoadConfig loads configuration from environment variables with defaults
@@ -99,6 +101,7 @@ func LoadConfig() *Config {
 			MaxRequestSize: getInt64Env("MAX_REQUEST_SIZE", 10*1024*1024), // 10MB
 			EnableCORS:     getBoolEnv("ENABLE_CORS", true),
 			TrustedProxies: []string{"127.0.0.1", "::1"},
+			UITheme:        getEnv("UI_THEME", "bootstrap"), // "bootstrap" theme only
 		},
 		Database: DatabaseConfig{
 			Enabled:      getBoolEnv("DB_ENABLED", true),
@@ -117,6 +120,7 @@ func LoadConfig() *Config {
 			ClientSecret: getEnv("OIDC_CLIENT_SECRET", ""),
 			RedirectURI:  getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/callback/"),
 			BaseURL:      getEnv("BASE_URL", "http://localhost:8000"),
+			IssuerURL:    getEnv("OIDC_ISSUER_URL", ""),
 		},
 		Providers: map[ProviderType]ProviderConfig{
 			ProviderAzureOpenAI: {
@@ -222,7 +226,6 @@ func getInt64Env(key string, defaultValue int64) int64 {
 	}
 	return defaultValue
 }
-
 
 func getBoolEnv(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {

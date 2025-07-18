@@ -1,6 +1,22 @@
-version: '3.8'
-
 services:
+  # Dex for OIDC testing
+  dex:
+    image: dexidp/dex:v2.37.0
+    container_name: llm-freeway-dex
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./dex-config.yaml:/etc/dex/config.yaml:ro
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    networks:
+      - llm-freeway
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5556/dex/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   postgres:
     image: postgres:15-alpine
     container_name: llm-freeway-postgres
@@ -84,8 +100,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      - dex
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -96,7 +111,7 @@ services:
     networks:
       - llm-freeway
     volumes:
-      - ./ui.html:/app/ui.html:ro
+      - ./index.html:/app/index.html:ro
 
 
 volumes:

@@ -20,10 +20,10 @@ import (
 
 // ContentPart represents a part of multi-modal content
 type ContentPart struct {
-	Type     string                 `json:"type"`
-	Text     string                 `json:"text,omitempty"`
-	ImageURL *ImageURL              `json:"image_url,omitempty"`
-	CacheControl *CacheControl      `json:"cache_control,omitempty"`
+	Type         string        `json:"type"`
+	Text         string        `json:"text,omitempty"`
+	ImageURL     *ImageURL     `json:"image_url,omitempty"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // ImageURL represents an image in a message
@@ -40,10 +40,10 @@ type CacheControl struct {
 
 // Message represents an OpenAI chat message
 type Message struct {
-	Role      string        `json:"role"`
-	Content   interface{}   `json:"content"`  // Can be string or []ContentPart
-	ToolCalls []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string       `json:"tool_call_id,omitempty"`
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content"` // Can be string or []ContentPart
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall represents a tool call in OpenAI format
@@ -80,23 +80,23 @@ type ToolFunction struct {
 
 // ChatRequest represents an OpenAI chat completion request
 type ChatRequest struct {
-	Messages         []Message                `json:"messages"`
-	Model            string                   `json:"model"`
-	Stream           bool                     `json:"stream"`
-	Tools            []Tool                   `json:"tools,omitempty"`
-	ToolChoice       interface{}              `json:"tool_choice,omitempty"`
-	ResponseFormat   map[string]interface{}   `json:"response_format,omitempty"`
-	Thinking         map[string]interface{}   `json:"thinking,omitempty"`
-	MaxTokens        int                      `json:"max_tokens,omitempty"`
-	Temperature      float64                  `json:"temperature,omitempty"`
-	TopP             float64                  `json:"top_p,omitempty"`
-	Stop             []string                 `json:"stop,omitempty"`
-	FrequencyPenalty float64                  `json:"frequency_penalty,omitempty"`
-	PresencePenalty  float64                  `json:"presence_penalty,omitempty"`
-	N                int                      `json:"n,omitempty"`
-	Modalities       []string                 `json:"modalities,omitempty"`
-	WebSearchOptions map[string]interface{}   `json:"web_search_options,omitempty"`
-	URLContext       map[string]interface{}   `json:"url_context,omitempty"`
+	Messages         []Message              `json:"messages"`
+	Model            string                 `json:"model"`
+	Stream           bool                   `json:"stream"`
+	Tools            []Tool                 `json:"tools,omitempty"`
+	ToolChoice       interface{}            `json:"tool_choice,omitempty"`
+	ResponseFormat   map[string]interface{} `json:"response_format,omitempty"`
+	Thinking         map[string]interface{} `json:"thinking,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	Temperature      float64                `json:"temperature,omitempty"`
+	TopP             float64                `json:"top_p,omitempty"`
+	Stop             []string               `json:"stop,omitempty"`
+	FrequencyPenalty float64                `json:"frequency_penalty,omitempty"`
+	PresencePenalty  float64                `json:"presence_penalty,omitempty"`
+	N                int                    `json:"n,omitempty"`
+	Modalities       []string               `json:"modalities,omitempty"`
+	WebSearchOptions map[string]interface{} `json:"web_search_options,omitempty"`
+	URLContext       map[string]interface{} `json:"url_context,omitempty"`
 }
 
 // ClaudeAdapter handles Claude models via both direct Anthropic API and AWS Bedrock
@@ -272,31 +272,31 @@ func stripBasicHTML(content string) string {
 	// Remove script and style tags and their contents
 	scriptRegex := regexp.MustCompile(`(?i)<script[^>]*>.*?</script>`)
 	content = scriptRegex.ReplaceAllString(content, "\n\n")
-	
+
 	styleRegex := regexp.MustCompile(`(?i)<style[^>]*>.*?</style>`)
 	content = styleRegex.ReplaceAllString(content, "\n\n")
-	
+
 	// Remove title tags and their contents
 	titleRegex := regexp.MustCompile(`(?i)<title[^>]*>.*?</title>`)
 	content = titleRegex.ReplaceAllString(content, "")
-	
+
 	// Remove head tags and their contents
 	headRegex := regexp.MustCompile(`(?i)<head[^>]*>.*?</head>`)
 	content = headRegex.ReplaceAllString(content, "")
-	
+
 	// Replace block-level elements with newlines to preserve spacing
 	blockRegex := regexp.MustCompile(`(?i)</(div|p|h[1-6]|li|ul|ol|blockquote|section|article|header|footer|main|nav|aside)>`)
 	content = blockRegex.ReplaceAllString(content, "\n\n")
-	
+
 	// Remove remaining HTML tags
 	htmlRegex := regexp.MustCompile(`<[^>]*>`)
 	content = htmlRegex.ReplaceAllString(content, "")
-	
+
 	// Clean up excessive whitespace while preserving intentional spacing
 	content = regexp.MustCompile(`\n\s*\n`).ReplaceAllString(content, "\n\n")
 	content = regexp.MustCompile(`[ \t]+`).ReplaceAllString(content, " ")
 	content = strings.TrimSpace(content)
-	
+
 	return content
 }
 
@@ -304,19 +304,19 @@ func stripBasicHTML(content string) string {
 func (a *ClaudeAdapter) processContentWithURLContext(content string) string {
 	// Extract URLs from content
 	urls := extractURLsFromContent(content)
-	
+
 	if len(urls) == 0 {
 		return content
 	}
-	
+
 	// Build enhanced content with URL contexts
 	var enhancedContent strings.Builder
 	enhancedContent.WriteString(content)
-	
+
 	// Process each URL
 	for _, urlStr := range urls {
 		log.Printf("Processing URL context: %s", urlStr)
-		
+
 		// Fetch URL content
 		urlContent, err := fetchURLContent(urlStr)
 		if err != nil {
@@ -324,11 +324,11 @@ func (a *ClaudeAdapter) processContentWithURLContext(content string) string {
 			// Continue processing other URLs
 			continue
 		}
-		
+
 		// Add URL context to content
 		enhancedContent.WriteString(fmt.Sprintf("\n\n[URL Context from %s]\n%s\n[End URL Context]", urlStr, urlContent))
 	}
-	
+
 	return enhancedContent.String()
 }
 
@@ -370,7 +370,7 @@ func (a *ClaudeAdapter) processMessageURLContext(msg Message) Message {
 		msg.Content = a.processContentWithURLContext(content)
 		return msg
 	}
-	
+
 	// Process structured content
 	if contentParts, ok := msg.Content.([]ContentPart); ok {
 		processedParts := make([]ContentPart, len(contentParts))
@@ -382,10 +382,9 @@ func (a *ClaudeAdapter) processMessageURLContext(msg Message) Message {
 		}
 		msg.Content = processedParts
 	}
-	
+
 	return msg
 }
-
 
 // ConvertToAnthropicMessagesWithCacheControl converts OpenAI messages to Anthropic format with full cache control support
 func (a *ClaudeAdapter) ConvertToAnthropicMessagesWithCacheControl(messages []Message) ([]anthropic.MessageParam, []anthropic.TextBlockParam, bool) {
@@ -404,13 +403,13 @@ func (a *ClaudeAdapter) ConvertToAnthropicMessagesWithCacheControl(messages []Me
 							Type: "text",
 							Text: part.Text,
 						}
-						
+
 						// Check for cache control
 						if part.CacheControl != nil {
 							hasCacheControl = true
 							// Cache control would be handled through headers
 						}
-						
+
 						systemBlocks = append(systemBlocks, textBlock)
 					}
 				}
@@ -436,18 +435,18 @@ func (a *ClaudeAdapter) convertMessageToAnthropicWithCacheControl(msg Message, r
 	// Check if content is structured with cache control
 	if contentParts, ok := msg.Content.([]ContentPart); ok {
 		var blocks []anthropic.ContentBlockParamUnion
-		
+
 		for _, part := range contentParts {
 			if part.Type == "text" {
 				// Create text block with cache control support
 				textBlock := anthropic.NewTextBlock(part.Text)
-				
+
 				// For now, we'll handle cache control at the header level
 				// Future enhancement would add proper cache control support
 				blocks = append(blocks, textBlock)
 			}
 		}
-		
+
 		if role == "user" {
 			return anthropic.MessageParam{
 				Role:    "user",
@@ -455,12 +454,12 @@ func (a *ClaudeAdapter) convertMessageToAnthropicWithCacheControl(msg Message, r
 			}
 		} else {
 			return anthropic.MessageParam{
-				Role:    "assistant", 
+				Role:    "assistant",
 				Content: blocks,
 			}
 		}
 	}
-	
+
 	// Fallback to simple string content
 	contentStr := getContentAsString(msg.Content)
 	if role == "user" {
@@ -671,13 +670,13 @@ func (a *ClaudeAdapter) HandleRequestWithProvider(req ChatRequest, provider stri
 
 	// Check if prompt caching is needed
 	hasCacheControl := a.HasCacheControl(req.Messages) || a.HasToolCacheControl(req.Tools)
-	
+
 	// Check if URL context processing is enabled
 	enableURLContext := req.URLContext != nil
 	if enableURLContext {
 		log.Printf("URL context processing enabled for request")
 	}
-	
+
 	// Model name is already the actual model name (no prefix to remove)
 	anthropicMessages, systemMessage := a.ConvertToAnthropicMessagesWithURLContext(req.Messages, enableURLContext)
 
@@ -696,7 +695,7 @@ func (a *ClaudeAdapter) HandleRequestWithProvider(req ChatRequest, provider stri
 	// Handle thinking mode with budget tokens
 	if req.Thinking != nil {
 		log.Printf("Thinking mode detected in request")
-		
+
 		// Extract budget tokens if specified
 		if budgetTokens, exists := req.Thinking["budget_tokens"]; exists {
 			if budget, ok := budgetTokens.(int); ok && budget > 0 {
@@ -766,13 +765,13 @@ func (a *ClaudeAdapter) HandleStreamingRequestWithProvider(req ChatRequest, w ht
 
 	// Check if prompt caching is needed
 	hasCacheControl := a.HasCacheControl(req.Messages) || a.HasToolCacheControl(req.Tools)
-	
+
 	// Check if URL context processing is enabled
 	enableURLContext := req.URLContext != nil
 	if enableURLContext {
 		log.Printf("URL context processing enabled for streaming request")
 	}
-	
+
 	// Model name is already the actual model name (no prefix to remove)
 	anthropicMessages, systemMessage := a.ConvertToAnthropicMessagesWithURLContext(req.Messages, enableURLContext)
 

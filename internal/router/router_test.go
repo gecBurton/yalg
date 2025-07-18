@@ -41,13 +41,13 @@ func TestRouter(t *testing.T) {
 	t.Run("pattern matches are rejected - no fuzzy matching", func(t *testing.T) {
 		// Test that partial matches are rejected
 		invalidModels := []string{
-			"gpt-5",                     // Not in our exact list
-			"gpt",                       // Partial match should fail
-			"claude",                    // Partial match should fail
-			"gemini",                    // Partial match should fail
-			"davinci-003",               // Pattern match should fail
-			"claude-4",                  // Non-existent version should fail
-			"palm-2",                    // Pattern match should fail
+			"gpt-5",       // Not in our exact list
+			"gpt",         // Partial match should fail
+			"claude",      // Partial match should fail
+			"gemini",      // Partial match should fail
+			"davinci-003", // Pattern match should fail
+			"claude-4",    // Non-existent version should fail
+			"palm-2",      // Pattern match should fail
 		}
 
 		for _, route := range invalidModels {
@@ -100,12 +100,12 @@ func TestRouter(t *testing.T) {
 
 	t.Run("get available models returns only enabled providers", func(t *testing.T) {
 		models := router.GetAvailableModels()
-		
+
 		// Should have models for all enabled providers
 		assert.Contains(t, models, config.ProviderAzureOpenAI)
 		assert.Contains(t, models, config.ProviderAWSBedrock)
 		assert.Contains(t, models, config.ProviderGoogleAI)
-		
+
 		// Check that we have some models for each provider
 		assert.NotEmpty(t, models[config.ProviderAzureOpenAI])
 		assert.NotEmpty(t, models[config.ProviderAWSBedrock])
@@ -156,7 +156,7 @@ func TestTableNameConsistency(t *testing.T) {
 
 	t.Run("model routes have consistent data", func(t *testing.T) {
 		models := router.GetAvailableModels()
-		
+
 		for provider, routes := range models {
 			for _, route := range routes {
 				// Verify all routes have required fields
@@ -167,7 +167,7 @@ func TestTableNameConsistency(t *testing.T) {
 				assert.Greater(t, route.MaxTokens, 0, "MaxTokens should be positive")
 				assert.Greater(t, route.RateLimit, 0, "RateLimit should be positive")
 				assert.Equal(t, provider, route.Provider, "Provider should match")
-				
+
 				// Verify SupportsStreaming is set
 				assert.True(t, route.SupportsStreaming, "All current models should support streaming")
 			}
@@ -206,7 +206,7 @@ func TestSecurityValidation(t *testing.T) {
 	t.Run("only whitelisted exact models are accepted", func(t *testing.T) {
 		// Verify that ONLY the exact routes we defined in models.yaml are accepted
 		// This test ensures no pattern matching bypasses exist
-		
+
 		acceptedRoutes := []string{
 			"gpt-35-turbo",
 			"gpt-4o",
@@ -233,11 +233,11 @@ func TestSecurityValidation(t *testing.T) {
 
 		// Test that similar but not exact routes are rejected
 		rejectedSimilar := []string{
-			"gpt-4",                    // Route not in config
-			"claude-sonnet",            // Partial route name
-			"gemini-pro",               // Wrong route name
-			"GPT-4O",                   // Wrong case
-			"claude-3-sonnet-v2",       // Similar but different route
+			"gpt-4",              // Route not in config
+			"claude-sonnet",      // Partial route name
+			"gemini-pro",         // Wrong route name
+			"GPT-4O",             // Wrong case
+			"claude-3-sonnet-v2", // Similar but different route
 		}
 
 		for _, route := range rejectedSimilar {

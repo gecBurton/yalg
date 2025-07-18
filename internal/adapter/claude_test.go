@@ -1536,14 +1536,14 @@ func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		budgetInfo  map[string]interface{}
-		expectBudget bool
+		name            string
+		budgetInfo      map[string]interface{}
+		expectBudget    bool
 		expectRemaining int
 	}{
 		{
-			name: "no budget specified",
-			budgetInfo: nil,
+			name:         "no budget specified",
+			budgetInfo:   nil,
 			expectBudget: false,
 		},
 		{
@@ -1551,7 +1551,7 @@ func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
 			budgetInfo: map[string]interface{}{
 				"budget_tokens": 500,
 			},
-			expectBudget: true,
+			expectBudget:    true,
 			expectRemaining: 150, // 500 - 350 (150 input + 200 output)
 		},
 		{
@@ -1559,7 +1559,7 @@ func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
 			budgetInfo: map[string]interface{}{
 				"budget_tokens": 300,
 			},
-			expectBudget: true,
+			expectBudget:    true,
 			expectRemaining: 0, // Budget exhausted
 		},
 	}
@@ -1600,7 +1600,7 @@ func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
 				if len(blocks) != 1 {
 					t.Errorf("Expected 1 thinking block, got %d", len(blocks))
 				}
-				
+
 				if blocks[0]["type"] != "thinking" {
 					t.Errorf("Expected thinking block type to be 'thinking', got %v", blocks[0]["type"])
 				}
@@ -1670,11 +1670,11 @@ func TestClaudeAdapter_URLContextProcessing(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 
 	tests := []struct {
-		name           string
-		messages       []Message
-		enableURL      bool
-		expectedURLs   []string
-		shouldProcess  bool
+		name          string
+		messages      []Message
+		enableURL     bool
+		expectedURLs  []string
+		shouldProcess bool
 	}{
 		{
 			name: "URL context disabled",
@@ -1734,11 +1734,11 @@ func TestClaudeAdapter_URLContextProcessing(t *testing.T) {
 			for _, msg := range tt.messages {
 				content := getContentAsString(msg.Content)
 				urls := extractURLsFromContent(content)
-				
+
 				if len(urls) != len(tt.expectedURLs) {
 					t.Errorf("Expected %d URLs, got %d", len(tt.expectedURLs), len(urls))
 				}
-				
+
 				for i, expectedURL := range tt.expectedURLs {
 					if i < len(urls) && urls[i] != expectedURL {
 						t.Errorf("Expected URL %s, got %s", expectedURL, urls[i])
@@ -1748,12 +1748,12 @@ func TestClaudeAdapter_URLContextProcessing(t *testing.T) {
 
 			// Test message conversion with URL context
 			anthropicMessages, systemMessage := adapter.ConvertToAnthropicMessagesWithURLContext(tt.messages, tt.enableURL)
-			
+
 			// Check basic conversion
 			if len(anthropicMessages) != len(tt.messages) {
 				t.Errorf("Expected %d messages, got %d", len(tt.messages), len(anthropicMessages))
 			}
-			
+
 			// Check if URL context processing occurred
 			if tt.enableURL && len(tt.expectedURLs) > 0 {
 				// For URL context enabled cases, we expect the content to potentially be modified
@@ -1763,7 +1763,7 @@ func TestClaudeAdapter_URLContextProcessing(t *testing.T) {
 					t.Error("Expected at least one message after URL context processing")
 				}
 			}
-			
+
 			// Verify system message is handled correctly
 			if systemMessage != "" {
 				t.Logf("System message: %s", systemMessage)
@@ -1860,11 +1860,10 @@ func TestClaudeAdapter_HTMLStripping(t *testing.T) {
 			result := stripBasicHTML(tt.input)
 			result = strings.TrimSpace(result)
 			tt.expected = strings.TrimSpace(tt.expected)
-			
+
 			if result != tt.expected {
 				t.Errorf("stripBasicHTML(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
 }
-

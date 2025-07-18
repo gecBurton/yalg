@@ -53,21 +53,15 @@ type Claims struct {
 }
 
 // NewOIDCClient creates a new OIDC client
-func NewOIDCClient(clientID, clientSecret, redirectURI string) (*OIDCClient, error) {
-	// Use the well-known configuration provided
-	config := OIDCConfig{
-		Issuer:                "https://sso.service.security.gov.uk",
-		AuthorizationEndpoint: "https://sso.service.security.gov.uk/auth/oidc",
-		TokenEndpoint:         "https://sso.service.security.gov.uk/auth/token",
-		UserInfoEndpoint:      "https://sso.service.security.gov.uk/auth/profile",
-		EndSessionEndpoint:    "https://sso.service.security.gov.uk/sign-out?from_app=",
-		JWKSUri:               "https://sso.service.security.gov.uk/.well-known/jwks.json",
-		ScopesSupported:       []string{"openid", "email", "profile"},
-		ClaimsSupported:       []string{"aud", "email", "exp", "iat", "iss", "sub", "display_name", "nickname", "name", "given_name", "family_name"},
+func NewOIDCClient(clientID, clientSecret, redirectURI, issuerURL string) (*OIDCClient, error) {
+	// Discover OIDC configuration from well-known endpoint
+	config, err := discoverOIDCConfig(issuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover OIDC configuration: %w", err)
 	}
 
 	client := &OIDCClient{
-		config:       config,
+		config:       *config,
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		redirectURI:  redirectURI,
@@ -101,6 +95,7 @@ func (c *OIDCClient) ExchangeCode(ctx context.Context, code string) (*TokenRespo
 		"client_id":     {c.clientID},
 		"client_secret": {c.clientSecret},
 		"code":          {code},
+		"redirect_uri":  {c.redirectURI},
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.config.TokenEndpoint, strings.NewReader(data.Encode()))
@@ -267,6 +262,56 @@ func (c *OIDCClient) loadJWKSet() error {
 	}
 	c.jwkSet = set
 	return nil
+}
+
+// discoverOIDCConfig discovers OIDC configuration from the well-known endpoint
+func discoverOIDCConfig(issuerURL string) (*OIDCConfig, error) {
+	// Ensure issuer URL doesn't have trailing slash
+	issuerURL = strings.TrimSuffix(issuerURL, "/")
+	
+	// Try the standard well-known endpoint
+	wellKnownURL := issuerURL + "/.well-known/openid_configuration"
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", wellKnownURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery request: %w", err)
+	}
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OIDC configuration: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode == http.StatusOK {
+		var config OIDCConfig
+		if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+			return nil, fmt.Errorf("failed to decode OIDC configuration: %w", err)
+		}
+		return &config, nil
+	}
+	
+	// Fallback: construct Keycloak configuration manually
+	if strings.Contains(issuerURL, "realms/") {
+		config := &OIDCConfig{
+			Issuer:                issuerURL,
+			AuthorizationEndpoint: issuerURL + "/protocol/openid-connect/auth",
+			TokenEndpoint:         issuerURL + "/protocol/openid-connect/token",
+			UserInfoEndpoint:      issuerURL + "/protocol/openid-connect/userinfo",
+			EndSessionEndpoint:    issuerURL + "/protocol/openid-connect/logout",
+			JWKSUri:               issuerURL + "/protocol/openid-connect/certs",
+			ScopesSupported:       []string{"openid", "email", "profile"},
+			ClaimsSupported:       []string{"aud", "email", "exp", "iat", "iss", "sub", "preferred_username", "name", "given_name", "family_name"},
+		}
+		return config, nil
+	}
+	
+	return nil, fmt.Errorf("OIDC discovery failed with status %d and no fallback available", resp.StatusCode)
 }
 
 // contains checks if a slice contains a string

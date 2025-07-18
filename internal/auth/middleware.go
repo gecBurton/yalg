@@ -44,10 +44,10 @@ type Session struct {
 // NewAuthMiddleware creates a new authentication middleware
 func NewAuthMiddleware(oidcClient *OIDCClient, sessionStore SessionStore) *AuthMiddleware {
 	publicPaths := map[string]bool{
-		"/health":         true,
-		"/auth/login":     true,
-		"/auth/callback":  true,
-		"/auth/logout":    true,
+		"/health":        true,
+		"/auth/login":    true,
+		"/auth/callback": true,
+		"/auth/logout":   true,
 	}
 
 	return &AuthMiddleware{
@@ -165,12 +165,12 @@ func GetUserFromContext(ctx context.Context) (*User, bool) {
 func (m *AuthMiddleware) sendUnauthorized(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	
+
 	response := map[string]string{
 		"error":   "unauthorized",
 		"message": message,
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 	log.Printf("Authentication failed: %s", message)
 }

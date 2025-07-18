@@ -1,5 +1,6 @@
 run:
-	docker compose up --build -d
+	docker compose up -d postgres keycloak
+	go run .
 
 test:
 	go test ./...

@@ -89,7 +89,7 @@ func TestEventEdgeCases(t *testing.T) {
 
 		err := db.Create(event).Error
 		require.NoError(t, err)
-		
+
 		// The error message might be truncated based on database field size (500 chars)
 		// But it should still be stored successfully
 		assert.NotEmpty(t, event.ErrorMsg)
@@ -98,7 +98,7 @@ func TestEventEdgeCases(t *testing.T) {
 
 	t.Run("multiple event creation", func(t *testing.T) {
 		db.CleanupTestData(t)
-		
+
 		// Test sequential creation of multiple events
 		const numEvents = 10
 
@@ -162,7 +162,7 @@ func TestEventEdgeCases(t *testing.T) {
 		var events []Event
 		err = db.Where("request_id = ?", requestID).Order("timestamp ASC").Find(&events).Error
 		require.NoError(t, err)
-		
+
 		assert.Len(t, events, 2)
 		assert.Equal(t, "request", events[0].Type)
 		assert.Equal(t, "response", events[1].Type)
@@ -172,7 +172,7 @@ func TestEventEdgeCases(t *testing.T) {
 
 	t.Run("events with future timestamps", func(t *testing.T) {
 		futureTime := time.Now().Add(1 * time.Hour)
-		
+
 		event := &Event{
 			Type:       "request",
 			RequestID:  "future-req",
@@ -186,7 +186,7 @@ func TestEventEdgeCases(t *testing.T) {
 
 		err := db.Create(event).Error
 		require.NoError(t, err)
-		
+
 		// Verify the future timestamp was preserved
 		var retrieved Event
 		err = db.Where("request_id = ?", "future-req").First(&retrieved).Error
@@ -198,7 +198,7 @@ func TestEventEdgeCases(t *testing.T) {
 func TestEventTableNameConsistency(t *testing.T) {
 	event := Event{}
 	assert.Equal(t, "events", event.TableName())
-	
+
 	// Verify table name is consistent across instances
 	anotherEvent := Event{
 		Type:      "request",

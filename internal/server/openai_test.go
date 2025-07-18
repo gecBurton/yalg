@@ -93,7 +93,7 @@ func TestOpenAIClientInitialization(t *testing.T) {
 					if apiVersion == "" {
 						apiVersion = "2024-02-01"
 					}
-					
+
 					client = &openai.Client{}
 					azureClient := openai.NewClient(
 						azure.WithEndpoint(tt.endpoint, apiVersion),
@@ -131,7 +131,7 @@ func TestOpenAIProviderDetection(t *testing.T) {
 			config.ProviderOpenAI:      {Enabled: true},
 		},
 	}
-	
+
 	router := router.NewRouter(cfg)
 
 	tests := []struct {
@@ -174,7 +174,7 @@ func TestOpenAIProviderDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			provider, err := router.DetectProvider(tt.model)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("Expected error for model %s, got none", tt.model)
@@ -196,11 +196,11 @@ func TestOpenAIMessageConversion(t *testing.T) {
 	s := &Server{}
 
 	tests := []struct {
-		name              string
-		messages          []adapter.Message
-		expectedCount     int
-		hasSystemMessage  bool
-		hasUserMessage    bool
+		name                string
+		messages            []adapter.Message
+		expectedCount       int
+		hasSystemMessage    bool
+		hasUserMessage      bool
 		hasAssistantMessage bool
 	}{
 		{
@@ -217,9 +217,9 @@ func TestOpenAIMessageConversion(t *testing.T) {
 				{Role: "system", Content: "You are a helpful assistant."},
 				{Role: "user", Content: "Hello!"},
 			},
-			expectedCount:     2,
-			hasSystemMessage:  true,
-			hasUserMessage:    true,
+			expectedCount:    2,
+			hasSystemMessage: true,
+			hasUserMessage:   true,
 		},
 		{
 			name: "full conversation",
@@ -253,7 +253,7 @@ func TestOpenAIMessageConversion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := s.ConvertToOpenAIMessages(tt.messages)
-			
+
 			if len(result) != tt.expectedCount {
 				t.Errorf("Expected %d messages, got %d", tt.expectedCount, len(result))
 			}
@@ -299,9 +299,9 @@ func TestOpenAIErrorHandling(t *testing.T) {
 			config.ProviderOpenAI:      {Enabled: true},
 		},
 	}
-	
+
 	errorHandler := errors.NewErrorHandler(cfg)
-	
+
 	tests := []struct {
 		name               string
 		provider           config.ProviderType
@@ -349,15 +349,15 @@ func TestOpenAIErrorHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			testErr := fmt.Errorf(tt.errorMessage)
-			
+
 			providerErr := errorHandler.HandleError(testErr, tt.provider, map[string]any{"model": "gpt-4o"})
-			
+
 			if providerErr.HTTPStatus != tt.expectedHTTPStatus {
 				t.Errorf("Expected HTTP status %d, got %d", tt.expectedHTTPStatus, providerErr.HTTPStatus)
 			}
-			
+
 			openaiErr := providerErr.ToOpenAIError("test-request-id")
-			
+
 			// Check error structure
 			if errorObj, ok := openaiErr["error"].(map[string]interface{}); ok {
 				if errorType, exists := errorObj["type"]; exists {
@@ -523,9 +523,9 @@ func TestOpenAIHeaderProcessing(t *testing.T) {
 		{
 			name: "non-rate-limit headers",
 			inputHeaders: map[string]string{
-				"content-type":   "application/json",
-				"authorization":  "Bearer token",
-				"custom-header":  "custom-value",
+				"content-type":  "application/json",
+				"authorization": "Bearer token",
+				"custom-header": "custom-value",
 			},
 			expectedFields: []string{},
 			provider:       config.ProviderOpenAI,
@@ -536,7 +536,7 @@ func TestOpenAIHeaderProcessing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Process headers (simulating server header processing)
 			rateLimitInfo := make(map[string]string)
-			
+
 			for key, value := range tt.inputHeaders {
 				lowerKey := strings.ToLower(key)
 				if strings.Contains(lowerKey, "ratelimit") {
@@ -642,7 +642,7 @@ func TestOpenAIEndpointConfiguration(t *testing.T) {
 					if apiVersion == "" {
 						apiVersion = "2024-02-01" // Default version
 					}
-					
+
 					azureClient := openai.NewClient(
 						azure.WithEndpoint(tt.endpoint, apiVersion),
 						azure.WithAPIKey(tt.apiKey),
@@ -705,7 +705,7 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 			messages: []adapter.Message{
 				{Role: "user", Content: "Hello, how are you doing today? I hope you're having a great day!"},
 			},
-			expectedTokenRange: [2]int{15, 25}, // ~70 chars = ~17 + 3 overhead = ~20 tokens  
+			expectedTokenRange: [2]int{15, 25}, // ~70 chars = ~17 + 3 overhead = ~20 tokens
 		},
 		{
 			name: "long conversation",
@@ -734,9 +734,9 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			estimatedTokens := s.estimateTokenUsage(tt.messages)
-			
+
 			if estimatedTokens < tt.expectedTokenRange[0] || estimatedTokens > tt.expectedTokenRange[1] {
-				t.Errorf("Estimated tokens %d not in expected range [%d, %d]", 
+				t.Errorf("Estimated tokens %d not in expected range [%d, %d]",
 					estimatedTokens, tt.expectedTokenRange[0], tt.expectedTokenRange[1])
 			}
 		})
@@ -746,10 +746,10 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 // TestOpenAIResponseValidation tests OpenAI response format validation
 func TestOpenAIResponseValidation(t *testing.T) {
 	tests := []struct {
-		name           string
-		response       map[string]interface{}
-		expectValid    bool
-		missingFields  []string
+		name          string
+		response      map[string]interface{}
+		expectValid   bool
+		missingFields []string
 	}{
 		{
 			name: "valid completion response",

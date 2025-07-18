@@ -17,11 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"google.golang.org/genai"
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/azure"
 	"github.com/openai/openai-go/option"
+	"google.golang.org/genai"
 )
 
 const (
@@ -194,8 +194,8 @@ func initializeGoogleAI(cfg *config.Config) *genai.Client {
 }
 
 func initializeAuthentication(cfg *config.Config, db *database.DB) (*auth.AuthMiddleware, *auth.AuthHandlers) {
-	if cfg.Auth.ClientID == "" || cfg.Auth.ClientSecret == "" {
-		log.Fatalf("Authentication is required but missing OIDC credentials. Please set OIDC_CLIENT_ID and OIDC_CLIENT_SECRET")
+	if cfg.Auth.ClientID == "" || cfg.Auth.ClientSecret == "" || cfg.Auth.IssuerURL == "" {
+		log.Fatalf("Authentication is required but missing OIDC credentials. Please set OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and OIDC_ISSUER_URL")
 	}
 
 	// Create OIDC client
@@ -203,6 +203,7 @@ func initializeAuthentication(cfg *config.Config, db *database.DB) (*auth.AuthMi
 		cfg.Auth.ClientID,
 		cfg.Auth.ClientSecret,
 		cfg.Auth.RedirectURI,
+		cfg.Auth.IssuerURL,
 	)
 	if err != nil {
 		log.Fatalf("Failed to initialize OIDC client: %v", err)

@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Gateway</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #0d6efd;
+            --secondary-color: #6c757d;
+            --success-color: #198754;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107;
+            --info-color: #0dcaf0;
+        }
+
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+        }
+
+        .hero-section {
+            background: linear-gradient(135deg, var(--primary-color), #0b5ed7);
+            color: white;
+            padding: 4rem 0;
+            margin-bottom: 3rem;
+        }
+
+        .hero-section h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .hero-section p {
+            font-size: 1.3rem;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+        }
+
+        .feature-card {
+            border: none;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            height: 100%;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .feature-icon {
+            font-size: 2.5rem;
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            height: 100%;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: var(--secondary-color);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+            font-size: 0.875rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .token-display {
+            background: #e9ecef;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            padding: 0.75rem;
+            font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+            font-size: 0.875rem;
+            word-break: break-all;
+        }
+
+        .sidebar {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .model-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.75rem;
+            margin: 0.25rem;
+            background: #e9ecef;
+            border-radius: 15px;
+            font-size: 0.875rem;
+        }
+
+        .model-badge i {
+            margin-right: 0.5rem;
+        }
+
+        .btn-copy {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .response-container {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .navbar-nav .nav-link {
+            font-weight: 500;
+        }
+
+        .card-header {
+            background: var(--primary-color);
+            color: white;
+            font-weight: 600;
+        }
+
+        .btn-outline-primary:hover {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        @media (max-width: 768px) {
+            .hero-section h1 {
+                font-size: 2.5rem;
+            }
+            
+            .hero-section p {
+                font-size: 1.1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-rocket-takeoff"></i> LLM Gateway
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto" id="auth-nav">
+                    <!-- Auth links will be inserted here -->
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Unauthenticated View -->
+    <div id="unauthenticated-view" class="d-none">
+        <!-- Hero Section -->
+        <section class="hero-section">
+            <div class="container text-center">
+                <h1>LLM Gateway</h1>
+                <p class="lead">OpenAI-compatible API gateway for multiple AI providers</p>
+                <a href="/auth/login" class="btn btn-light btn-lg">
+                    <i class="bi bi-box-arrow-in-right"></i> Get Started
+                </a>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <div class="container mb-5">
+            <div class="row">
+                <div class="col-md-4 mb-4">
+                    <div class="card feature-card">
+                        <div class="card-body text-center">
+                            <i class="bi bi-plug feature-icon"></i>
+                            <h5 class="card-title">OpenAI Compatible</h5>
+                            <p class="card-text">Drop-in replacement for existing applications. No code changes needed.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="card feature-card">
+                        <div class="card-body text-center">
+                            <i class="bi bi-globe feature-icon"></i>
+                            <h5 class="card-title">Multi-Provider</h5>
+                            <p class="card-text">Support for OpenAI, Anthropic, Google Gemini, and AWS Bedrock.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="card feature-card">
+                        <div class="card-body text-center">
+                            <i class="bi bi-shield-check feature-icon"></i>
+                            <h5 class="card-title">Enterprise Security</h5>
+                            <p class="card-text">OIDC/SSO integration with comprehensive rate limiting and monitoring.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Authenticated View -->
+    <div id="authenticated-view" class="d-none">
+        <!-- Welcome Section -->
+        <section class="hero-section">
+            <div class="container text-center">
+                <h1>Welcome to LLM Gateway</h1>
+                <p class="lead">Your unified API gateway for AI language models</p>
+            </div>
+        </section>
+
+        <div class="container">
+            <div class="row">
+                <!-- Main Content -->
+                <div class="col-lg-8 mb-4">
+                    <!-- API Token Card -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <i class="bi bi-key"></i> API Authentication
+                        </div>
+                        <div class="card-body">
+                            <p class="card-text">Copy this token to authenticate your API requests:</p>
+                            <div class="accordion" id="tokenAccordion">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#tokenCollapse">
+                                            <i class="bi bi-eye me-2"></i> Show API Token
+                                        </button>
+                                    </h2>
+                                    <div id="tokenCollapse" class="accordion-collapse collapse" data-bs-parent="#tokenAccordion">
+                                        <div class="accordion-body">
+                                            <div class="token-display mb-3" id="user-token"></div>
+                                            <button class="btn btn-outline-primary btn-copy" onclick="copyToken()">
+                                                <i class="bi bi-clipboard"></i> Copy Token
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Start Card -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <i class="bi bi-lightning"></i> Quick Start
+                        </div>
+                        <div class="card-body">
+                            <p class="card-text">Use your token in API requests:</p>
+                            <div class="accordion" id="curlAccordion">
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#curlCollapse">
+                                            <i class="bi bi-terminal me-2"></i> Show cURL Example
+                                        </button>
+                                    </h2>
+                                    <div id="curlCollapse" class="accordion-collapse collapse" data-bs-parent="#curlAccordion">
+                                        <div class="accordion-body">
+                                            <div class="code-block mb-3" id="curl-example"></div>
+                                            <button class="btn btn-outline-primary btn-copy" onclick="copyCurlExample()">
+                                                <i class="bi bi-clipboard"></i> Copy Command
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Test API Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <i class="bi bi-chat-dots"></i> Test API
+                        </div>
+                        <div class="card-body">
+                            <p class="card-text">Try sending a message to test the API:</p>
+                            <form id="testForm">
+                                <div class="mb-3">
+                                    <label for="model" class="form-label">Model</label>
+                                    <select class="form-select" id="model">
+                                        <option value="gpt-4o-mini">GPT-4o Mini (Azure)</option>
+                                        <option value="openai-gpt-4o">GPT-4o (OpenAI)</option>
+                                        <option value="claude-3-5-sonnet">Claude 3.5 Sonnet (Anthropic)</option>
+                                        <option value="claude-3-sonnet-bedrock">Claude 3 Sonnet (AWS)</option>
+                                        <option value="gemini-1-5-pro">Gemini 1.5 Pro (Google)</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="prompt" class="form-label">Message</label>
+                                    <textarea class="form-control" id="prompt" rows="3" placeholder="Enter your message..."></textarea>
+                                </div>
+                                <button type="button" class="btn btn-primary" onclick="sendRequest()">
+                                    <i class="bi bi-send"></i> Send Request
+                                </button>
+                            </form>
+                            
+                            <div id="response-container" class="response-container d-none">
+                                <h6><i class="bi bi-chat-square-text"></i> Response</h6>
+                                <div id="response-content" class="code-block"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sidebar -->
+                <div class="col-lg-4">
+                    <!-- Usage Stats -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <i class="bi bi-bar-chart"></i> Usage Statistics
+                        </div>
+                        <div class="card-body">
+                            <div class="stat-card">
+                                <div class="stat-value" id="request-count">-</div>
+                                <div class="stat-label">Total Requests</div>
+                            </div>
+                            <div class="mt-3">
+                                <a href="/metrics?format=json" class="btn btn-outline-primary btn-sm">
+                                    <i class="bi bi-graph-up"></i> View Detailed Metrics
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Available Models -->
+                    <div class="card">
+                        <div class="card-header">
+                            <i class="bi bi-cpu"></i> Available Models
+                        </div>
+                        <div class="card-body">
+                            <div id="model-status">
+                                <div class="d-flex justify-content-center">
+                                    <div class="loading-spinner"></div>
+                                    <span class="ms-2">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        let userToken = '';
+
+        // Check authentication status on page load
+        async function checkAuth() {
+            try {
+                const response = await fetch('/auth/status');
+                const data = await response.json();
+                
+                if (data.authenticated) {
+                    showAuthenticatedView();
+                    await loadUserProfile();
+                    await loadBasicStats();
+                    await loadModelStatus();
+                } else {
+                    showUnauthenticatedView();
+                }
+            } catch (error) {
+                console.error('Auth check failed:', error);
+                showUnauthenticatedView();
+            }
+        }
+
+        function showAuthenticatedView() {
+            document.getElementById('unauthenticated-view').classList.add('d-none');
+            document.getElementById('authenticated-view').classList.remove('d-none');
+            document.getElementById('auth-nav').innerHTML = `
+                <li class="nav-item">
+                    <a class="nav-link" href="/auth/logout">
+                        <i class="bi bi-box-arrow-right"></i> Sign out
+                    </a>
+                </li>
+            `;
+        }
+
+        function showUnauthenticatedView() {
+            document.getElementById('unauthenticated-view').classList.remove('d-none');
+            document.getElementById('authenticated-view').classList.add('d-none');
+            document.getElementById('auth-nav').innerHTML = `
+                <li class="nav-item">
+                    <a class="nav-link" href="/auth/login">
+                        <i class="bi bi-box-arrow-in-right"></i> Sign in
+                    </a>
+                </li>
+            `;
+        }
+
+        async function loadUserProfile() {
+            try {
+                const response = await fetch('/auth/profile');
+                const data = await response.json();
+                
+                if (data.id_token) {
+                    userToken = data.id_token;
+                    document.getElementById('user-token').textContent = userToken;
+                    updateCurlExample();
+                }
+            } catch (error) {
+                console.error('Failed to load profile:', error);
+            }
+        }
+
+        async function loadBasicStats() {
+            try {
+                const response = await fetch('/metrics?format=json');
+                const data = await response.json();
+                
+                if (data.usage) {
+                    document.getElementById('request-count').textContent = data.usage.total_requests || 0;
+                }
+            } catch (error) {
+                console.error('Failed to load stats:', error);
+            }
+        }
+
+        async function loadModelStatus() {
+            try {
+                const response = await fetch('/v1/models', {
+                    headers: {
+                        'Authorization': `Bearer ${userToken}`
+                    }
+                });
+                const data = await response.json();
+                
+                if (data.data) {
+                    const modelStatusDiv = document.getElementById('model-status');
+                    const modelCount = data.data.length;
+                    const modelList = data.data.slice(0, 6).map(model => 
+                        `<span class="model-badge">
+                            <i class="bi bi-cpu"></i> ${model.id}
+                        </span>`
+                    ).join('');
+                    
+                    modelStatusDiv.innerHTML = `
+                        <div class="mb-3">
+                            <strong class="text-primary">${modelCount}</strong> models available
+                        </div>
+                        <div class="mb-2">
+                            ${modelList}
+                            ${modelCount > 6 ? '<div class="text-muted small mt-2">...and more</div>' : ''}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to load model status:', error);
+                document.getElementById('model-status').innerHTML = `
+                    <div class="text-muted">
+                        <i class="bi bi-exclamation-triangle"></i> Unable to load model status
+                    </div>
+                `;
+            }
+        }
+
+        function updateCurlExample() {
+            if (userToken) {
+                const curlCommand = `curl -X POST http://localhost:3000/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${userToken}" \\
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Hello, how are you?"}
+    ]
+  }'`;
+                document.getElementById('curl-example').textContent = curlCommand;
+            }
+        }
+
+        function copyToken() {
+            if (userToken) {
+                navigator.clipboard.writeText(userToken);
+                showFeedback(event.target, 'Copied!', 'bi-check');
+            }
+        }
+
+        function copyCurlExample() {
+            const curlElement = document.getElementById('curl-example');
+            if (curlElement && curlElement.textContent) {
+                navigator.clipboard.writeText(curlElement.textContent);
+                showFeedback(event.target, 'Copied!', 'bi-check');
+            }
+        }
+
+        function showFeedback(button, message, icon) {
+            const originalHtml = button.innerHTML;
+            button.innerHTML = `<i class="bi ${icon}"></i> ${message}`;
+            button.disabled = true;
+            
+            setTimeout(() => {
+                button.innerHTML = originalHtml;
+                button.disabled = false;
+            }, 2000);
+        }
+
+        async function sendRequest() {
+            const model = document.getElementById('model').value;
+            const prompt = document.getElementById('prompt').value;
+            
+            if (!prompt.trim()) {
+                showAlert('Please enter a message', 'warning');
+                return;
+            }
+
+            const responseContainer = document.getElementById('response-container');
+            const responseContent = document.getElementById('response-content');
+            
+            responseContainer.classList.remove('d-none');
+            responseContent.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <div class="loading-spinner me-2"></div>
+                    <span>Sending request...</span>
+                </div>
+            `;
+
+            try {
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${userToken}`
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            { role: 'user', content: prompt }
+                        ]
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    responseContent.textContent = data.choices[0].message.content;
+                    responseContent.className = 'code-block text-success';
+                    loadBasicStats();
+                } else {
+                    const errorData = await response.json();
+                    responseContent.textContent = `Error: ${errorData.error?.message || 'Request failed'}`;
+                    responseContent.className = 'code-block text-danger';
+                }
+            } catch (error) {
+                responseContent.textContent = `Error: ${error.message}`;
+                responseContent.className = 'code-block text-danger';
+            }
+        }
+
+        function showAlert(message, type) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            const container = document.querySelector('.container');
+            container.insertBefore(alertDiv, container.firstChild);
+            
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 5000);
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', checkAuth);
+    </script>
+</body>
+</html>

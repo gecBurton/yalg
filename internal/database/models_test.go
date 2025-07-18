@@ -55,7 +55,7 @@ func TestEventModel(t *testing.T) {
 
 	t.Run("query events by provider", func(t *testing.T) {
 		db.CleanupTestData(t)
-		
+
 		// Create test events for different providers
 		events := []Event{
 			{
@@ -213,7 +213,7 @@ func TestEventValidation(t *testing.T) {
 
 	t.Run("valid event types", func(t *testing.T) {
 		validTypes := []string{"request", "response"}
-		
+
 		for _, eventType := range validTypes {
 			event := &Event{
 				Type:       eventType,
@@ -247,7 +247,7 @@ func TestEventHelperMethods(t *testing.T) {
 	t.Run("get events by provider", func(t *testing.T) {
 		openaiEvents := db.GetEventsByProvider(t, config.ProviderAzureOpenAI)
 		assert.NotEmpty(t, openaiEvents)
-		
+
 		for _, event := range openaiEvents {
 			assert.Equal(t, config.ProviderAzureOpenAI, event.Provider)
 		}
@@ -256,14 +256,14 @@ func TestEventHelperMethods(t *testing.T) {
 	t.Run("get events by type", func(t *testing.T) {
 		requestEvents := db.GetEventsByType(t, "request")
 		responseEvents := db.GetEventsByType(t, "response")
-		
+
 		assert.NotEmpty(t, requestEvents)
 		assert.NotEmpty(t, responseEvents)
-		
+
 		for _, event := range requestEvents {
 			assert.Equal(t, "request", event.Type)
 		}
-		
+
 		for _, event := range responseEvents {
 			assert.Equal(t, "response", event.Type)
 		}
@@ -272,11 +272,11 @@ func TestEventHelperMethods(t *testing.T) {
 	t.Run("get recent events", func(t *testing.T) {
 		recentEvents := db.GetRecentEvents(t, 10) // Last 10 minutes
 		assert.NotEmpty(t, recentEvents)
-		
+
 		// All events should be within the last 10 minutes
 		cutoff := time.Now().Add(-10 * time.Minute)
 		for _, event := range recentEvents {
-			assert.True(t, event.Timestamp.After(cutoff), 
+			assert.True(t, event.Timestamp.After(cutoff),
 				"Event timestamp should be within last 10 minutes")
 		}
 	})
@@ -287,9 +287,9 @@ func TestCreateTestEvent(t *testing.T) {
 	defer db.CleanupTestData(t)
 
 	t.Run("create successful test event", func(t *testing.T) {
-		event := db.CreateTestEvent(t, "request", "test-req", 
+		event := db.CreateTestEvent(t, "request", "test-req",
 			config.ProviderGoogleAI, "gemini-1.5-pro", 150, true)
-		
+
 		assert.NotZero(t, event.ID)
 		assert.Equal(t, "request", event.Type)
 		assert.Equal(t, "test-req", event.RequestID)
@@ -301,9 +301,9 @@ func TestCreateTestEvent(t *testing.T) {
 	})
 
 	t.Run("create failed test event", func(t *testing.T) {
-		event := db.CreateTestEvent(t, "response", "test-req-failed", 
+		event := db.CreateTestEvent(t, "response", "test-req-failed",
 			config.ProviderAWSBedrock, "anthropic.claude-3-opus-20240229-v1:0", 0, false)
-		
+
 		assert.NotZero(t, event.ID)
 		assert.Equal(t, "response", event.Type)
 		assert.False(t, event.Success)
