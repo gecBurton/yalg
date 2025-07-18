@@ -488,8 +488,23 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAI(anthropicResp *anthropic.Messag
 	return a.ConvertAnthropicToOpenAIWithBudget(anthropicResp, model, nil)
 }
 
+// ConvertAnthropicToOpenAIWithCalculator converts Anthropic response to OpenAI format with accurate token calculation
+func (a *ClaudeAdapter) ConvertAnthropicToOpenAIWithCalculator(anthropicResp *anthropic.Message, model string, tokenCalculator TokenCalculator) map[string]interface{} {
+	return a.ConvertAnthropicToOpenAIWithBudgetAndCalculator(anthropicResp, model, nil, tokenCalculator)
+}
+
+// TokenCalculator defines the interface for token calculation
+type TokenCalculator interface {
+	CalculateTokenUsage(text string, modelName string) int
+}
+
 // ConvertAnthropicToOpenAIWithBudget converts Anthropic response to OpenAI format with budget token tracking
 func (a *ClaudeAdapter) ConvertAnthropicToOpenAIWithBudget(anthropicResp *anthropic.Message, model string, budgetInfo map[string]interface{}) map[string]interface{} {
+	return a.ConvertAnthropicToOpenAIWithBudgetAndCalculator(anthropicResp, model, budgetInfo, nil)
+}
+
+// ConvertAnthropicToOpenAIWithBudgetAndCalculator converts Anthropic response to OpenAI format with budget token tracking and accurate token calculation
+func (a *ClaudeAdapter) ConvertAnthropicToOpenAIWithBudgetAndCalculator(anthropicResp *anthropic.Message, model string, budgetInfo map[string]interface{}, tokenCalculator TokenCalculator) map[string]interface{} {
 	// Extract content and thinking blocks separately
 	var content string
 	var reasoningContent string
@@ -505,8 +520,8 @@ func (a *ClaudeAdapter) ConvertAnthropicToOpenAIWithBudget(anthropicResp *anthro
 				"type":    "thinking",
 				"content": block.Text,
 			})
-			// Estimate thinking tokens (rough approximation)
-			thinkingTokens += len(block.Text) / 4
+			// Calculate thinking tokens accurately using tiktoken
+			thinkingTokens += tokenCalculator.CalculateTokenUsage(block.Text, model)
 		}
 	}
 
@@ -661,6 +676,11 @@ func (a *ClaudeAdapter) ConvertAnthropicStreamToOpenAI(event anthropic.MessageSt
 
 // HandleRequestWithProvider processes non-streaming requests for Claude models with explicit provider
 func (a *ClaudeAdapter) HandleRequestWithProvider(req ChatRequest, provider string) (map[string]interface{}, error) {
+	return a.HandleRequestWithProviderAndCalculator(req, provider, nil)
+}
+
+// HandleRequestWithProviderAndCalculator processes non-streaming requests for Claude models with explicit provider and token calculator
+func (a *ClaudeAdapter) HandleRequestWithProviderAndCalculator(req ChatRequest, provider string, tokenCalculator TokenCalculator) (map[string]interface{}, error) {
 	log.Printf("Processing non-streaming request for Claude model: %s via provider: %s", req.Model, provider)
 
 	client, err := a.getClientForProvider(provider)
@@ -739,9 +759,9 @@ func (a *ClaudeAdapter) HandleRequestWithProvider(req ChatRequest, provider stri
 	// Convert to OpenAI format with budget tracking
 	var response map[string]interface{}
 	if req.Thinking != nil {
-		response = a.ConvertAnthropicToOpenAIWithBudget(result, req.Model, req.Thinking)
+		response = a.ConvertAnthropicToOpenAIWithBudgetAndCalculator(result, req.Model, req.Thinking, tokenCalculator)
 	} else {
-		response = a.ConvertAnthropicToOpenAI(result, req.Model)
+		response = a.ConvertAnthropicToOpenAIWithCalculator(result, req.Model, tokenCalculator)
 	}
 
 	// Log the response structure for debugging

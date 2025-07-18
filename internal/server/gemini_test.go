@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"llm-freeway/internal/adapter"
 	"llm-freeway/internal/config"
 	"llm-freeway/internal/database"
 	"llm-freeway/internal/errors"
@@ -25,6 +26,13 @@ type mockGeminiAdapter struct {
 }
 
 func (m *mockGeminiAdapter) HandleEmbeddingRequest(input []string, model string) (map[string]any, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.response, nil
+}
+
+func (m *mockGeminiAdapter) HandleEmbeddingRequestWithCalculator(input []string, model string, tokenCalculator adapter.TokenCalculator) (map[string]any, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

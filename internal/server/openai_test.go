@@ -684,13 +684,14 @@ func TestOpenAIEndpointConfiguration(t *testing.T) {
 	}
 }
 
-// TestOpenAITokenUsageEstimation tests token usage estimation for metrics
-func TestOpenAITokenUsageEstimation(t *testing.T) {
+// TestOpenAITokenUsageCalculation tests token usage calculation using tiktoken
+func TestOpenAITokenUsageCalculation(t *testing.T) {
 	s := &Server{}
 
 	tests := []struct {
 		name               string
 		messages           []adapter.Message
+		model              string
 		expectedTokenRange [2]int // min, max expected tokens
 	}{
 		{
@@ -698,14 +699,16 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 			messages: []adapter.Message{
 				{Role: "user", Content: "Hi"},
 			},
-			expectedTokenRange: [2]int{3, 8}, // 2 chars/4 + 3 overhead = ~4 tokens
+			model:              "gpt-4",
+			expectedTokenRange: [2]int{3, 6}, // "Hi" = 1 token + 3 overhead = 4 tokens
 		},
 		{
 			name: "medium message",
 			messages: []adapter.Message{
 				{Role: "user", Content: "Hello, how are you doing today? I hope you're having a great day!"},
 			},
-			expectedTokenRange: [2]int{15, 25}, // ~70 chars = ~17 + 3 overhead = ~20 tokens
+			model:              "gpt-4",
+			expectedTokenRange: [2]int{18, 22}, // More accurate with tiktoken
 		},
 		{
 			name: "long conversation",
@@ -715,11 +718,13 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 				{Role: "assistant", Content: "Machine learning is a subset of artificial intelligence..."},
 				{Role: "user", Content: "That's very helpful, thank you!"},
 			},
-			expectedTokenRange: [2]int{40, 80}, // Multiple messages with overhead
+			model:              "gpt-4",
+			expectedTokenRange: [2]int{40, 60}, // Multiple messages with overhead
 		},
 		{
 			name:               "empty messages",
 			messages:           []adapter.Message{},
+			model:              "gpt-4",
 			expectedTokenRange: [2]int{1, 1}, // Minimum 1 token
 		},
 		{
@@ -727,17 +732,18 @@ func TestOpenAITokenUsageEstimation(t *testing.T) {
 			messages: []adapter.Message{
 				{Role: "user", Content: ""},
 			},
+			model:              "gpt-4",
 			expectedTokenRange: [2]int{3, 3}, // 0 content + 3 overhead = 3 tokens
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			estimatedTokens := s.estimateTokenUsage(tt.messages)
+			calculatedTokens := s.CalculateTokenUsageForMessages(tt.messages, tt.model)
 
-			if estimatedTokens < tt.expectedTokenRange[0] || estimatedTokens > tt.expectedTokenRange[1] {
-				t.Errorf("Estimated tokens %d not in expected range [%d, %d]",
-					estimatedTokens, tt.expectedTokenRange[0], tt.expectedTokenRange[1])
+			if calculatedTokens < tt.expectedTokenRange[0] || calculatedTokens > tt.expectedTokenRange[1] {
+				t.Errorf("Calculated tokens %d not in expected range [%d, %d]",
+					calculatedTokens, tt.expectedTokenRange[0], tt.expectedTokenRange[1])
 			}
 		})
 	}

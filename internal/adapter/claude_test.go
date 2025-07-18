@@ -10,6 +10,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
+// mockTokenCalculator implements TokenCalculator for testing
+type mockTokenCalculator struct{}
+
+func (m *mockTokenCalculator) CalculateTokenUsage(text string, modelName string) int {
+	// Return word count for predictable test results
+	return len(strings.Fields(text))
+}
+
 func TestClaudeAdapter_IsClaudeModel(t *testing.T) {
 	adapter := &ClaudeAdapter{}
 
@@ -1343,7 +1351,7 @@ func TestClaudeAdapter_ThinkingOutput(t *testing.T) {
 		},
 	}
 
-	result := adapter.ConvertAnthropicToOpenAI(anthropicResp, "claude-3-7-sonnet-20250219")
+	result := adapter.ConvertAnthropicToOpenAIWithCalculator(anthropicResp, "claude-3-7-sonnet-20250219", &mockTokenCalculator{})
 
 	// Check that thinking content is properly extracted
 	choices, ok := result["choices"].([]map[string]interface{})
@@ -1566,7 +1574,7 @@ func TestClaudeAdapter_ThinkingModeWithBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := adapter.ConvertAnthropicToOpenAIWithBudget(anthropicResp, "claude-3-5-sonnet-20241022", tt.budgetInfo)
+			result := adapter.ConvertAnthropicToOpenAIWithBudgetAndCalculator(anthropicResp, "claude-3-5-sonnet-20241022", tt.budgetInfo, &mockTokenCalculator{})
 
 			// Check basic structure
 			if result["object"] != "chat.completion" {

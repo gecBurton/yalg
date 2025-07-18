@@ -418,7 +418,7 @@ func (s *Server) handleClaude(req adapter.ChatRequest, w http.ResponseWriter, me
 	}
 
 	// Handle non-streaming
-	openaiResp, err := s.claudeAdapter.HandleRequestWithProvider(req, string(provider))
+	openaiResp, err := s.claudeAdapter.HandleRequestWithProviderAndCalculator(req, string(provider), s)
 	if err != nil {
 		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
 	}
@@ -538,9 +538,11 @@ func (s *Server) handleStreamingRequest(
 	}
 
 	// For streaming requests, calculate accurate token usage based on message content
-	metric.TokensUsed = s.CalculateTokenUsageForMessages(req.Messages, req.Model)
-	metric.PromptTokens = metric.TokensUsed * 7 / 10 // Estimate ~70% prompt, 30% response
-	metric.ResponseTokens = metric.TokensUsed - metric.PromptTokens
+	metric.PromptTokens = s.CalculateTokenUsageForMessages(req.Messages, req.Model)
+	// Note: ResponseTokens will be 0 for streaming since we don't capture the response content
+	// Total tokens for streaming = PromptTokens + unknown ResponseTokens
+	metric.TokensUsed = metric.PromptTokens
+	metric.ResponseTokens = 0
 
 	return err
 }
@@ -864,7 +866,7 @@ func (s *Server) handleGeminiEmbedding(req EmbeddingRequest, actualModelName str
 	}
 
 	// Call Gemini adapter
-	geminiResponse, err := s.geminiAdapter.HandleEmbeddingRequest(input, actualModelName)
+	geminiResponse, err := s.geminiAdapter.HandleEmbeddingRequestWithCalculator(input, actualModelName, s)
 	if err != nil {
 		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
 	}
@@ -1279,8 +1281,8 @@ func (s *Server) getTokenEncoder(modelName string) (*tiktoken.Tiktoken, error) {
 func (s *Server) CalculateTokenUsage(text string, modelName string) int {
 	encoder, err := s.getTokenEncoder(modelName)
 	if err != nil {
-		log.Printf("Failed to get encoder for model %s: %v, falling back to estimation", modelName, err)
-		return s.estimateTokenUsageFromText(text)
+		log.Printf("Failed to get encoder for model %s: %v", modelName, err)
+		return 0
 	}
 
 	tokens := encoder.Encode(text, nil, nil)
@@ -1291,8 +1293,8 @@ func (s *Server) CalculateTokenUsage(text string, modelName string) int {
 func (s *Server) CalculateTokenUsageForMessages(messages []adapter.Message, modelName string) int {
 	encoder, err := s.getTokenEncoder(modelName)
 	if err != nil {
-		log.Printf("Failed to get encoder for model %s: %v, falling back to estimation", modelName, err)
-		return s.estimateTokenUsage(messages)
+		log.Printf("Failed to get encoder for model %s: %v", modelName, err)
+		return 0
 	}
 
 	totalTokens := 0
@@ -1324,51 +1326,3 @@ func (s *Server) CalculateTokenUsageForMessages(messages []adapter.Message, mode
 	return totalTokens
 }
 
-// estimateTokenUsageFromText provides a fallback estimation for a single text string
-func (s *Server) estimateTokenUsageFromText(text string) int {
-	charCount := len(text)
-	wordCount := len(strings.Fields(text))
-
-	// Base token estimation using character count (more accurate than word count)
-	// GPT models use ~4 characters per token on average for English text
-	tokenEstimate := charCount / 4
-
-	// Alternative estimation using word count (~1.3 tokens per word)
-	wordTokenEstimate := (wordCount * 13) / 10
-
-	// Use the higher of the two estimates for better accuracy
-	tokens := tokenEstimate
-	if wordTokenEstimate > tokenEstimate {
-		tokens = wordTokenEstimate
-	}
-
-	// Don't enforce minimum here - let the caller decide
-	// Empty content should return 0 tokens
-	if tokens < 0 {
-		tokens = 0
-	}
-
-	return tokens
-}
-
-// estimateTokenUsage provides a fallback estimate of token usage based on word count
-// This is used when tiktoken fails or for models without specific encodings
-func (s *Server) estimateTokenUsage(messages []adapter.Message) int {
-	totalTokens := 0
-
-	for _, msg := range messages {
-		contentStr := s.getContentAsString(msg.Content)
-		msgTokens := s.estimateTokenUsageFromText(contentStr)
-		
-		// Add overhead for message structure (3-4 tokens per message)
-		msgTokens += 3
-		totalTokens += msgTokens
-	}
-
-	// Minimum of 1 token for empty input
-	if totalTokens < 1 {
-		totalTokens = 1
-	}
-
-	return totalTokens
-}

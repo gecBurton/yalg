@@ -663,6 +663,11 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 
 // HandleEmbeddingRequest handles embedding requests for Gemini models
 func (a *GeminiAdapter) HandleEmbeddingRequest(input []string, model string) (map[string]any, error) {
+	return a.HandleEmbeddingRequestWithCalculator(input, model, nil)
+}
+
+// HandleEmbeddingRequestWithCalculator handles embedding requests for Gemini models with token calculator
+func (a *GeminiAdapter) HandleEmbeddingRequestWithCalculator(input []string, model string, tokenCalculator TokenCalculator) (map[string]any, error) {
 	log.Printf("Creating embeddings for model: %s", model)
 
 	// Ensure model name is properly formatted
@@ -702,8 +707,8 @@ func (a *GeminiAdapter) HandleEmbeddingRequest(input []string, model string) (ma
 
 		embeddings = append(embeddings, embedding)
 		
-		// Estimate token usage (rough approximation)
-		totalTokens += len(strings.Fields(text))
+		// Calculate token usage accurately using tiktoken
+		totalTokens += tokenCalculator.CalculateTokenUsage(text, model)
 	}
 
 	// Create OpenAI-compatible response
