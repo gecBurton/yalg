@@ -872,7 +872,7 @@ func TestGeminiAdapter_ImageGeneration(t *testing.T) {
 	}
 
 	// Verify basic structure
-	if result[0].Role != "user" {
+	if result[0].Role != genai.RoleUser {
 		t.Errorf("Expected user role, got %s", result[0].Role)
 	}
 
@@ -912,7 +912,7 @@ func TestGeminiAdapter_ThinkingMode(t *testing.T) {
 	}
 
 	// Verify basic structure
-	if result[0].Role != "user" {
+	if result[0].Role != genai.RoleUser {
 		t.Errorf("Expected user role, got %s", result[0].Role)
 	}
 
