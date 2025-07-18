@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"llm-freeway/internal/config"
@@ -168,8 +169,12 @@ func TestTableNameConsistency(t *testing.T) {
 				assert.Greater(t, route.RateLimit, 0, "RateLimit should be positive")
 				assert.Equal(t, provider, route.Provider, "Provider should match")
 
-				// Verify SupportsStreaming is set
-				assert.True(t, route.SupportsStreaming, "All current models should support streaming")
+				// Verify SupportsStreaming is set correctly (embedding models don't support streaming)
+				if strings.Contains(route.RouteName, "embedding") || strings.Contains(route.RouteName, "embed") {
+					assert.False(t, route.SupportsStreaming, "Embedding models should not support streaming")
+				} else {
+					assert.True(t, route.SupportsStreaming, "Non-embedding models should support streaming")
+				}
 			}
 		}
 	})

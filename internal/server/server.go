@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/openai/openai-go"
+	"github.com/pkoukk/tiktoken-go"
 	"google.golang.org/genai"
 )
 
@@ -536,8 +537,8 @@ func (s *Server) handleStreamingRequest(
 		log.Printf("Streaming error: %v", err)
 	}
 
-	// For streaming requests, estimate token usage based on message content
-	metric.TokensUsed = s.estimateTokenUsage(req.Messages)
+	// For streaming requests, calculate accurate token usage based on message content
+	metric.TokensUsed = s.CalculateTokenUsageForMessages(req.Messages, req.Model)
 	metric.PromptTokens = metric.TokensUsed * 7 / 10 // Estimate ~70% prompt, 30% response
 	metric.ResponseTokens = metric.TokensUsed - metric.PromptTokens
 
@@ -1022,8 +1023,8 @@ func (s *Server) callTitanEmbedding(input []string, modelName string) (*BedrockE
 			"inputText": text,
 		}
 
-		// Estimate tokens (rough approximation)
-		tokens := len(strings.Fields(text))
+		// Calculate accurate token count
+		tokens := s.CalculateTokenUsage(text, modelName)
 		totalTokens += tokens
 
 		// Call Bedrock API
@@ -1073,10 +1074,11 @@ func (s *Server) callCohereEmbedding(input []string, modelName string) (*Bedrock
 		"input_type": "search_document", // Default input type
 	}
 
-	// Estimate tokens
+	// Calculate accurate token count
 	totalTokens := 0
 	for _, text := range input {
-		totalTokens += len(strings.Fields(text))
+		tokens := s.CalculateTokenUsage(text, modelName)
+		totalTokens += tokens
 	}
 
 	// Call Bedrock API
@@ -1245,34 +1247,121 @@ func (s *Server) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// estimateTokenUsage provides a rough estimate of token usage based on word count
-// This is used for streaming requests where exact token counts aren't available
-// Based on tiktoken approximations used in LiteLLM
+// getTokenEncoder returns the appropriate tiktoken encoder for a model
+func (s *Server) getTokenEncoder(modelName string) (*tiktoken.Tiktoken, error) {
+	// Map model names to appropriate encodings
+	switch {
+	case strings.Contains(modelName, "gpt-4"):
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "gpt-3.5"):
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "text-embedding"):
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "claude"):
+		// Claude uses a similar tokenizer to GPT-4
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "gemini"):
+		// Gemini uses a different tokenizer, but cl100k_base is a reasonable approximation
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "titan"):
+		// Amazon Titan uses a different tokenizer, but cl100k_base is a reasonable approximation
+		return tiktoken.GetEncoding("cl100k_base")
+	case strings.Contains(modelName, "cohere"):
+		// Cohere uses a different tokenizer, but cl100k_base is a reasonable approximation
+		return tiktoken.GetEncoding("cl100k_base")
+	default:
+		// Default to cl100k_base for unknown models
+		return tiktoken.GetEncoding("cl100k_base")
+	}
+}
+
+// CalculateTokenUsage accurately calculates token usage using tiktoken
+func (s *Server) CalculateTokenUsage(text string, modelName string) int {
+	encoder, err := s.getTokenEncoder(modelName)
+	if err != nil {
+		log.Printf("Failed to get encoder for model %s: %v, falling back to estimation", modelName, err)
+		return s.estimateTokenUsageFromText(text)
+	}
+
+	tokens := encoder.Encode(text, nil, nil)
+	return len(tokens)
+}
+
+// CalculateTokenUsageForMessages accurately calculates token usage for chat messages
+func (s *Server) CalculateTokenUsageForMessages(messages []adapter.Message, modelName string) int {
+	encoder, err := s.getTokenEncoder(modelName)
+	if err != nil {
+		log.Printf("Failed to get encoder for model %s: %v, falling back to estimation", modelName, err)
+		return s.estimateTokenUsage(messages)
+	}
+
+	totalTokens := 0
+
+	for _, msg := range messages {
+		contentStr := s.getContentAsString(msg.Content)
+		
+		// Count tokens for the message content
+		contentTokens := encoder.Encode(contentStr, nil, nil)
+		totalTokens += len(contentTokens)
+
+		// Add overhead for message structure (role, etc.)
+		// Different models have different overhead patterns
+		switch {
+		case strings.Contains(modelName, "gpt"):
+			totalTokens += 3 // GPT models add ~3 tokens per message for structure
+		case strings.Contains(modelName, "claude"):
+			totalTokens += 2 // Claude models have less overhead
+		default:
+			totalTokens += 3 // Default overhead
+		}
+	}
+
+	// Minimum of 1 token for empty input
+	if totalTokens < 1 {
+		totalTokens = 1
+	}
+
+	return totalTokens
+}
+
+// estimateTokenUsageFromText provides a fallback estimation for a single text string
+func (s *Server) estimateTokenUsageFromText(text string) int {
+	charCount := len(text)
+	wordCount := len(strings.Fields(text))
+
+	// Base token estimation using character count (more accurate than word count)
+	// GPT models use ~4 characters per token on average for English text
+	tokenEstimate := charCount / 4
+
+	// Alternative estimation using word count (~1.3 tokens per word)
+	wordTokenEstimate := (wordCount * 13) / 10
+
+	// Use the higher of the two estimates for better accuracy
+	tokens := tokenEstimate
+	if wordTokenEstimate > tokenEstimate {
+		tokens = wordTokenEstimate
+	}
+
+	// Don't enforce minimum here - let the caller decide
+	// Empty content should return 0 tokens
+	if tokens < 0 {
+		tokens = 0
+	}
+
+	return tokens
+}
+
+// estimateTokenUsage provides a fallback estimate of token usage based on word count
+// This is used when tiktoken fails or for models without specific encodings
 func (s *Server) estimateTokenUsage(messages []adapter.Message) int {
 	totalTokens := 0
 
 	for _, msg := range messages {
-		// Count characters and words
 		contentStr := s.getContentAsString(msg.Content)
-		charCount := len(contentStr)
-		wordCount := len(strings.Fields(contentStr))
-
-		// Base token estimation using character count (more accurate than word count)
-		// GPT models use ~4 characters per token on average for English text
-		tokenEstimate := charCount / 4
-
-		// Alternative estimation using word count (~1.3 tokens per word)
-		wordTokenEstimate := (wordCount * 13) / 10
-
-		// Use the higher of the two estimates for better accuracy
-		msgTokens := tokenEstimate
-		if wordTokenEstimate > tokenEstimate {
-			msgTokens = wordTokenEstimate
-		}
-
+		msgTokens := s.estimateTokenUsageFromText(contentStr)
+		
 		// Add overhead for message structure (3-4 tokens per message)
 		msgTokens += 3
-
 		totalTokens += msgTokens
 	}
 
