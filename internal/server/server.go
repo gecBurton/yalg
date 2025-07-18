@@ -108,6 +108,7 @@ type Server struct {
 	geminiAdapter      *adapter.GeminiAdapter
 	azureOpenAIClient  *openai.Client
 	directOpenAIClient *openai.Client
+	bedrockClient      *bedrockruntime.Client
 	config             *config.Config
 	database           *database.DB
 	errorHandler       *errors.ErrorHandler
@@ -132,6 +133,7 @@ func NewServer(cfg ServerConfig) *Server {
 		geminiAdapter:      geminiAdapter,
 		azureOpenAIClient:  cfg.AzureOpenAIClient,
 		directOpenAIClient: cfg.DirectOpenAIClient,
+		bedrockClient:      cfg.BedrockClient,
 		config:             cfg.Config,
 		database:           cfg.Database,
 		errorHandler:       cfg.ErrorHandler,
@@ -697,6 +699,8 @@ func (s *Server) EmbeddingHandler(w http.ResponseWriter, r *http.Request) {
 		responseErr = s.handleEmbedding(req, actualModelName, w, &metric, provider)
 	case config.ProviderGoogleAI:
 		responseErr = s.handleGeminiEmbedding(req, actualModelName, w, &metric, provider)
+	case config.ProviderAWSBedrock:
+		responseErr = s.handleBedrockEmbedding(req, actualModelName, w, &metric, provider)
 	default:
 		providerErr := s.errorHandler.CreateValidationError(
 			provider,
@@ -917,6 +921,237 @@ func (s *Server) handleGeminiEmbedding(req EmbeddingRequest, actualModelName str
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 	return nil
+}
+
+// handleBedrockEmbedding processes embedding requests for AWS Bedrock models
+func (s *Server) handleBedrockEmbedding(req EmbeddingRequest, actualModelName string, w http.ResponseWriter, metric *database.RequestMetrics, provider config.ProviderType) error {
+	log.Printf("Routing to Bedrock embedding model: %s", actualModelName)
+
+	if s.bedrockClient == nil {
+		return s.errorHandler.HandleError(fmt.Errorf("Bedrock client not available - missing AWS credentials"), provider, map[string]any{"model": req.Model})
+	}
+
+	// Convert input to the format expected by Bedrock
+	var input []string
+	switch v := req.Input.(type) {
+	case string:
+		input = []string{v}
+	case []string:
+		input = v
+	case []interface{}:
+		input = make([]string, len(v))
+		for i, item := range v {
+			if str, ok := item.(string); ok {
+				input[i] = str
+			} else {
+				return s.errorHandler.CreateValidationError(provider, "All input items must be strings", nil)
+			}
+		}
+	default:
+		return s.errorHandler.CreateValidationError(provider, "Input must be a string or array of strings", nil)
+	}
+
+	// Call Bedrock embedding API
+	bedrockResponse, err := s.callBedrockEmbedding(input, actualModelName)
+	if err != nil {
+		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
+	}
+
+	// Convert to our EmbeddingData format
+	embeddings := make([]EmbeddingData, len(bedrockResponse.Embeddings))
+	for i, embedding := range bedrockResponse.Embeddings {
+		embeddings[i] = EmbeddingData{
+			Object:    "embedding",
+			Index:     i,
+			Embedding: embedding,
+		}
+	}
+
+	response := EmbeddingResponse{
+		Object: "list",
+		Data:   embeddings,
+		Model:  req.Model, // Return original model name
+		Usage: EmbeddingUsage{
+			PromptTokens: bedrockResponse.Usage.PromptTokens,
+			TotalTokens:  bedrockResponse.Usage.TotalTokens,
+		},
+	}
+
+	// Update metrics with token usage
+	metric.TokensUsed = response.Usage.TotalTokens
+	metric.PromptTokens = response.Usage.PromptTokens
+	metric.ResponseTokens = 0 // Embeddings don't have response tokens
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	return nil
+}
+
+// BedrockEmbeddingResponse represents a response from Bedrock embedding API
+type BedrockEmbeddingResponse struct {
+	Embeddings [][]float32            `json:"embeddings"`
+	Usage      BedrockEmbeddingUsage  `json:"usage"`
+}
+
+// BedrockEmbeddingUsage represents token usage for Bedrock embeddings
+type BedrockEmbeddingUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// callBedrockEmbedding calls the appropriate Bedrock embedding API based on the model
+func (s *Server) callBedrockEmbedding(input []string, modelName string) (*BedrockEmbeddingResponse, error) {
+	switch {
+	case strings.Contains(modelName, "amazon.titan-embed"):
+		return s.callTitanEmbedding(input, modelName)
+	case strings.Contains(modelName, "cohere.embed"):
+		return s.callCohereEmbedding(input, modelName)
+	default:
+		return nil, fmt.Errorf("unsupported Bedrock embedding model: %s", modelName)
+	}
+}
+
+// callTitanEmbedding calls Amazon Titan embedding models
+func (s *Server) callTitanEmbedding(input []string, modelName string) (*BedrockEmbeddingResponse, error) {
+	var allEmbeddings [][]float32
+	totalTokens := 0
+
+	for _, text := range input {
+		// Prepare request body for Titan embedding
+		requestBody := map[string]interface{}{
+			"inputText": text,
+		}
+
+		// Estimate tokens (rough approximation)
+		tokens := len(strings.Fields(text))
+		totalTokens += tokens
+
+		// Call Bedrock API
+		embedding, err := s.invokeBedrockModel(modelName, requestBody)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse Titan response
+		titanResp, ok := embedding.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid response format from Titan")
+		}
+
+		embeddingData, ok := titanResp["embedding"].([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("no embedding data in Titan response")
+		}
+
+		// Convert to []float32
+		embeddingFloat32 := make([]float32, len(embeddingData))
+		for i, val := range embeddingData {
+			if floatVal, ok := val.(float64); ok {
+				embeddingFloat32[i] = float32(floatVal)
+			} else {
+				return nil, fmt.Errorf("invalid embedding value type")
+			}
+		}
+
+		allEmbeddings = append(allEmbeddings, embeddingFloat32)
+	}
+
+	return &BedrockEmbeddingResponse{
+		Embeddings: allEmbeddings,
+		Usage: BedrockEmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// callCohereEmbedding calls Cohere embedding models
+func (s *Server) callCohereEmbedding(input []string, modelName string) (*BedrockEmbeddingResponse, error) {
+	// Prepare request body for Cohere embedding
+	requestBody := map[string]interface{}{
+		"texts":      input,
+		"input_type": "search_document", // Default input type
+	}
+
+	// Estimate tokens
+	totalTokens := 0
+	for _, text := range input {
+		totalTokens += len(strings.Fields(text))
+	}
+
+	// Call Bedrock API
+	embedding, err := s.invokeBedrockModel(modelName, requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse Cohere response
+	cohereResp, ok := embedding.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format from Cohere")
+	}
+
+	embeddingsData, ok := cohereResp["embeddings"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no embeddings data in Cohere response")
+	}
+
+	// Convert to [][]float32
+	allEmbeddings := make([][]float32, len(embeddingsData))
+	for i, embeddingInterface := range embeddingsData {
+		embeddingArray, ok := embeddingInterface.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid embedding array format")
+		}
+
+		embeddingFloat32 := make([]float32, len(embeddingArray))
+		for j, val := range embeddingArray {
+			if floatVal, ok := val.(float64); ok {
+				embeddingFloat32[j] = float32(floatVal)
+			} else {
+				return nil, fmt.Errorf("invalid embedding value type")
+			}
+		}
+		allEmbeddings[i] = embeddingFloat32
+	}
+
+	return &BedrockEmbeddingResponse{
+		Embeddings: allEmbeddings,
+		Usage: BedrockEmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// invokeBedrockModel invokes a Bedrock model with the given request body
+func (s *Server) invokeBedrockModel(modelName string, requestBody map[string]interface{}) (interface{}, error) {
+	// Marshal request body to JSON
+	bodyBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %v", err)
+	}
+
+	// Invoke Bedrock model
+	input := &bedrockruntime.InvokeModelInput{
+		ModelId:     &modelName,
+		Body:        bodyBytes,
+		ContentType: aws.String("application/json"),
+		Accept:      aws.String("application/json"),
+	}
+
+	result, err := s.bedrockClient.InvokeModel(context.Background(), input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to invoke Bedrock model: %v", err)
+	}
+
+	// Parse response
+	var response interface{}
+	if err := json.Unmarshal(result.Body, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
+	}
+
+	return response, nil
 }
 
 // ModelsHandler returns available models

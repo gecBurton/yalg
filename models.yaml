@@ -262,3 +262,44 @@ models:
     supports_streaming: false
     enabled: true
     rate_limit: 100
+
+  # AWS Bedrock Embedding Models
+  amazon-titan-embed-text-v1:
+    provider: aws-bedrock
+    model_name: "amazon.titan-embed-text-v1"
+    display_name: "Amazon Titan Text Embeddings v1"
+    description: "Amazon's foundation embedding model for text"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100
+
+  amazon-titan-embed-text-v2:
+    provider: aws-bedrock
+    model_name: "amazon.titan-embed-text-v2:0"
+    display_name: "Amazon Titan Text Embeddings v2"
+    description: "Latest Amazon Titan embedding model with improved performance"
+    max_tokens: 8192
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100
+
+  cohere-embed-english-v3:
+    provider: aws-bedrock
+    model_name: "cohere.embed-english-v3"
+    display_name: "Cohere Embed English v3"
+    description: "Cohere's English embedding model via AWS Bedrock"
+    max_tokens: 512
+    supports_streaming: false
+    enabled: true
+    rate_limit: 80
+
+  cohere-embed-multilingual-v3:
+    provider: aws-bedrock
+    model_name: "cohere.embed-multilingual-v3"
+    display_name: "Cohere Embed Multilingual v3" 
+    description: "Cohere's multilingual embedding model via AWS Bedrock"
+    max_tokens: 512
+    supports_streaming: false
+    enabled: true
+    rate_limit: 80
