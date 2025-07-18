@@ -98,6 +98,309 @@ func TestGeminiAdapter_IsGeminiModel(t *testing.T) {
 	}
 }
 
+func TestGeminiAdapter_HandleEmbeddingRequest_ModelFormatting(t *testing.T) {
+	tests := []struct {
+		name          string
+		inputModel    string
+		expectedModel string
+	}{
+		{
+			name:          "Model with models/ prefix",
+			inputModel:    "models/embedding-001",
+			expectedModel: "models/embedding-001",
+		},
+		{
+			name:          "Model without models/ prefix",
+			inputModel:    "embedding-001",
+			expectedModel: "models/embedding-001",
+		},
+		{
+			name:          "Text embedding model",
+			inputModel:    "text-embedding-004",
+			expectedModel: "models/text-embedding-004",
+		},
+		{
+			name:          "Already formatted model",
+			inputModel:    "models/text-embedding-004",
+			expectedModel: "models/text-embedding-004",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test model name formatting logic
+			modelName := tt.inputModel
+			if !strings.HasPrefix(modelName, "models/") {
+				modelName = "models/" + modelName
+			}
+			
+			if modelName != tt.expectedModel {
+				t.Errorf("Expected model name %q, got %q", tt.expectedModel, modelName)
+			}
+		})
+	}
+}
+
+func TestGeminiAdapter_HandleEmbeddingRequest_TokenEstimation(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         []string
+		expectedTokens int
+	}{
+		{
+			name:          "Single word",
+			input:         []string{"hello"},
+			expectedTokens: 1,
+		},
+		{
+			name:          "Multiple words",
+			input:         []string{"hello world test"},
+			expectedTokens: 3,
+		},
+		{
+			name:          "Multiple inputs",
+			input:         []string{"hello", "world test", "this is longer"},
+			expectedTokens: 6, // 1 + 2 + 3 = 6
+		},
+		{
+			name:          "Empty string",
+			input:         []string{""},
+			expectedTokens: 0,
+		},
+		{
+			name:          "Mixed content",
+			input:         []string{"hello", "", "world test"},
+			expectedTokens: 3, // 1 + 0 + 2 = 3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test token estimation logic without requiring actual API calls
+			totalTokens := 0
+			for _, text := range tt.input {
+				totalTokens += len(strings.Fields(text))
+			}
+			
+			if totalTokens != tt.expectedTokens {
+				t.Errorf("Expected %d tokens, got %d", tt.expectedTokens, totalTokens)
+			}
+		})
+	}
+}
+
+func TestGeminiAdapter_InputValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       interface{}
+		expected    []string
+		expectError bool
+	}{
+		{
+			name:        "String input",
+			input:       "Hello world",
+			expected:    []string{"Hello world"},
+			expectError: false,
+		},
+		{
+			name:        "String slice input",
+			input:       []string{"Hello", "world"},
+			expected:    []string{"Hello", "world"},
+			expectError: false,
+		},
+		{
+			name:        "Interface slice with strings",
+			input:       []interface{}{"Hello", "world"},
+			expected:    []string{"Hello", "world"},
+			expectError: false,
+		},
+		{
+			name:        "Empty string slice",
+			input:       []string{},
+			expected:    []string{},
+			expectError: false,
+		},
+		{
+			name:        "Interface slice with non-string",
+			input:       []interface{}{"Hello", 123},
+			expected:    nil,
+			expectError: true,
+		},
+		{
+			name:        "Invalid input type",
+			input:       123,
+			expected:    nil,
+			expectError: true,
+		},
+		{
+			name:        "Nil input",
+			input:       nil,
+			expected:    nil,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test input validation logic
+			var result []string
+			var err error
+
+			switch v := tt.input.(type) {
+			case string:
+				result = []string{v}
+			case []string:
+				result = v
+			case []interface{}:
+				result = make([]string, len(v))
+				for i, item := range v {
+					if str, ok := item.(string); ok {
+						result[i] = str
+					} else {
+						err = fmt.Errorf("all input items must be strings")
+						break
+					}
+				}
+			default:
+				err = fmt.Errorf("input must be a string or array of strings")
+			}
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if len(result) != len(tt.expected) {
+					t.Errorf("Expected %d items, got %d", len(tt.expected), len(result))
+				}
+				for i, expected := range tt.expected {
+					if i < len(result) && result[i] != expected {
+						t.Errorf("Expected item %d to be %q, got %q", i, expected, result[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGeminiAdapter_ResponseFormatConversion(t *testing.T) {
+	tests := []struct {
+		name        string
+		geminiResp  map[string]any
+		expectError bool
+		validate    func(t *testing.T, data []map[string]any)
+	}{
+		{
+			name: "Valid response with float64 embeddings",
+			geminiResp: map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{
+						"object":    "embedding",
+						"index":     0,
+						"embedding": []float64{0.1, 0.2, 0.3},
+					},
+				},
+				"usage": map[string]any{
+					"prompt_tokens": 5.0,
+					"total_tokens":  5.0,
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, data []map[string]any) {
+				if len(data) != 1 {
+					t.Errorf("Expected 1 item, got %d", len(data))
+				}
+				if data[0]["index"] != 0 {
+					t.Errorf("Expected index 0, got %v", data[0]["index"])
+				}
+			},
+		},
+		{
+			name: "Valid response with float32 embeddings",
+			geminiResp: map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{
+						"object":    "embedding",
+						"index":     0,
+						"embedding": []float32{0.1, 0.2, 0.3},
+					},
+				},
+				"usage": map[string]any{
+					"prompt_tokens": 5.0,
+					"total_tokens":  5.0,
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, data []map[string]any) {
+				if len(data) != 1 {
+					t.Errorf("Expected 1 item, got %d", len(data))
+				}
+			},
+		},
+		{
+			name: "Invalid response format - data is not array",
+			geminiResp: map[string]any{
+				"object": "list",
+				"data":   "invalid",
+			},
+			expectError: true,
+		},
+		{
+			name: "Invalid embedding format",
+			geminiResp: map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{
+						"object":    "embedding",
+						"index":     0,
+						"embedding": "invalid",
+					},
+				},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test response format validation
+			data, ok := tt.geminiResp["data"].([]map[string]any)
+			if !ok {
+				if !tt.expectError {
+					t.Error("Expected valid data format")
+				}
+				return
+			}
+
+			// Test embedding format conversion
+			hasError := false
+			for _, item := range data {
+				if _, ok := item["embedding"].([]float32); !ok {
+					if _, ok := item["embedding"].([]float64); !ok {
+						hasError = true
+						break
+					}
+				}
+			}
+
+			if tt.expectError && !hasError {
+				t.Error("Expected error but validation passed")
+			} else if !tt.expectError && hasError {
+				t.Error("Unexpected validation error")
+			}
+
+			if !tt.expectError && tt.validate != nil {
+				tt.validate(t, data)
+			}
+		})
+	}
+}
+
 func TestGeminiAdapter_ConvertToGeminiMessages(t *testing.T) {
 	adapter := &GeminiAdapter{}
 

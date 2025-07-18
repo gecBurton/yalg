@@ -690,11 +690,13 @@ func (s *Server) EmbeddingHandler(w http.ResponseWriter, r *http.Request) {
 		ClientIP:  r.RemoteAddr,
 	}
 
-	// Only handle OpenAI providers for embeddings
+	// Handle embeddings for supported providers
 	var responseErr error
 	switch provider {
 	case config.ProviderAzureOpenAI, config.ProviderOpenAI:
 		responseErr = s.handleEmbedding(req, actualModelName, w, &metric, provider)
+	case config.ProviderGoogleAI:
+		responseErr = s.handleGeminiEmbedding(req, actualModelName, w, &metric, provider)
 	default:
 		providerErr := s.errorHandler.CreateValidationError(
 			provider,
@@ -821,6 +823,95 @@ func (s *Server) handleEmbedding(req EmbeddingRequest, actualModelName string, w
 	// Update metrics with token usage
 	metric.TokensUsed = int(embedding.Usage.TotalTokens)
 	metric.PromptTokens = int(embedding.Usage.PromptTokens)
+	metric.ResponseTokens = 0 // Embeddings don't have response tokens
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	return nil
+}
+
+// handleGeminiEmbedding processes embedding requests for Gemini models
+func (s *Server) handleGeminiEmbedding(req EmbeddingRequest, actualModelName string, w http.ResponseWriter, metric *database.RequestMetrics, provider config.ProviderType) error {
+	log.Printf("Routing to Gemini embedding model: %s", actualModelName)
+
+	if s.geminiAdapter == nil {
+		return s.errorHandler.HandleError(fmt.Errorf("Gemini client not available - missing API key configuration"), provider, map[string]any{"model": req.Model})
+	}
+
+	// Convert input to the format expected by Gemini
+	var input []string
+	switch v := req.Input.(type) {
+	case string:
+		input = []string{v}
+	case []string:
+		input = v
+	case []interface{}:
+		input = make([]string, len(v))
+		for i, item := range v {
+			if str, ok := item.(string); ok {
+				input[i] = str
+			} else {
+				return s.errorHandler.CreateValidationError(provider, "All input items must be strings", nil)
+			}
+		}
+	default:
+		return s.errorHandler.CreateValidationError(provider, "Input must be a string or array of strings", nil)
+	}
+
+	// Call Gemini adapter
+	geminiResponse, err := s.geminiAdapter.HandleEmbeddingRequest(input, actualModelName)
+	if err != nil {
+		return s.handleNonStreamingError(err, w, metric, req.Model, provider)
+	}
+
+	// Convert Gemini response to our format
+	data, ok := geminiResponse["data"].([]map[string]any)
+	if !ok {
+		return s.errorHandler.CreateValidationError(provider, "Invalid response format from Gemini", nil)
+	}
+
+	// Convert to our EmbeddingData format
+	embeddings := make([]EmbeddingData, len(data))
+	for i, item := range data {
+		embeddingSlice, ok := item["embedding"].([]float32)
+		if !ok {
+			// Try to convert from []float64 to []float32
+			if embeddingFloat64, ok := item["embedding"].([]float64); ok {
+				embeddingSlice = make([]float32, len(embeddingFloat64))
+				for j, val := range embeddingFloat64 {
+					embeddingSlice[j] = float32(val)
+				}
+			} else {
+				return s.errorHandler.CreateValidationError(provider, "Invalid embedding format", nil)
+			}
+		}
+
+		embeddings[i] = EmbeddingData{
+			Object:    "embedding",
+			Index:     i,
+			Embedding: embeddingSlice,
+		}
+	}
+
+	// Extract usage information
+	usage, ok := geminiResponse["usage"].(map[string]any)
+	if !ok {
+		usage = map[string]any{"prompt_tokens": 0, "total_tokens": 0}
+	}
+
+	response := EmbeddingResponse{
+		Object: "list",
+		Data:   embeddings,
+		Model:  req.Model, // Return original model name
+		Usage: EmbeddingUsage{
+			PromptTokens: int(usage["prompt_tokens"].(float64)),
+			TotalTokens:  int(usage["total_tokens"].(float64)),
+		},
+	}
+
+	// Update metrics with token usage
+	metric.TokensUsed = response.Usage.TotalTokens
+	metric.PromptTokens = response.Usage.PromptTokens
 	metric.ResponseTokens = 0 // Embeddings don't have response tokens
 
 	w.Header().Set("Content-Type", "application/json")

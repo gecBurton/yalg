@@ -660,3 +660,62 @@ func (a *GeminiAdapter) HandleStreamingRequest(req ChatRequest, w http.ResponseW
 
 	return nil
 }
+
+// HandleEmbeddingRequest handles embedding requests for Gemini models
+func (a *GeminiAdapter) HandleEmbeddingRequest(input []string, model string) (map[string]any, error) {
+	log.Printf("Creating embeddings for model: %s", model)
+
+	// Ensure model name is properly formatted
+	modelName := model
+	if !strings.HasPrefix(modelName, "models/") {
+		modelName = "models/" + modelName
+	}
+
+	// Create embedding requests for each input
+	var embeddings []map[string]any
+	totalTokens := 0
+
+	for i, text := range input {
+		// Create content for embedding
+		content := []*genai.Content{
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					genai.NewPartFromText(text),
+				},
+			},
+		}
+
+		// Get embedding using the correct API
+		resp, err := a.client.Models.EmbedContent(context.Background(), modelName, content, nil)
+		if err != nil {
+			log.Printf("Gemini embedding error for model %s: %s", model, sanitizeError(err))
+			return nil, fmt.Errorf("gemini embedding API error: %s", sanitizeError(err))
+		}
+
+		// Convert to OpenAI format
+		embedding := map[string]any{
+			"object":    "embedding",
+			"index":     i,
+			"embedding": resp.Embeddings,
+		}
+
+		embeddings = append(embeddings, embedding)
+		
+		// Estimate token usage (rough approximation)
+		totalTokens += len(strings.Fields(text))
+	}
+
+	// Create OpenAI-compatible response
+	response := map[string]any{
+		"object": "list",
+		"data":   embeddings,
+		"model":  model,
+		"usage": map[string]any{
+			"prompt_tokens": totalTokens,
+			"total_tokens":  totalTokens,
+		},
+	}
+
+	return response, nil
+}

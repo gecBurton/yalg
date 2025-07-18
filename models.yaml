@@ -241,3 +241,24 @@ models:
     supports_streaming: false
     enabled: true
     rate_limit: 100
+
+  # Google Gemini Embedding Models
+  gemini-embedding-001:
+    provider: google-ai
+    model_name: "models/embedding-001"
+    display_name: "Gemini Embedding 001"
+    description: "State-of-the-art Gemini embedding model with 3072 dimensions"
+    max_tokens: 2048
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100
+
+  gemini-text-embedding-004:
+    provider: google-ai
+    model_name: "models/text-embedding-004"
+    display_name: "Text Embedding 004"
+    description: "Previous generation Google embedding model"
+    max_tokens: 2048
+    supports_streaming: false
+    enabled: true
+    rate_limit: 100
